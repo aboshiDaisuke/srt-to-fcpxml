@@ -1,0 +1,1325 @@
+<!DOCTYPE html>
+<html lang="ja">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SRT Subtitle Editor → FCPXML</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Noto+Sans+JP:wght@300;400;500;700&display=swap');
+
+        :root {
+            --bg-darkest: #111111;
+            --bg-dark: #1a1a1a;
+            --bg-mid: #222222;
+            --bg-surface: #2a2a2a;
+            --bg-elevated: #333333;
+            --border: #3a3a3a;
+            --border-light: #444444;
+            --accent: #4e8ef7;
+            --accent-hover: #6ba0ff;
+            --accent-glow: rgba(78, 142, 247, 0.3);
+            --purple: #a77bfa;
+            --green: #42d77d;
+            --orange: #ff9f0a;
+            --red: #ff453a;
+            --text: #e5e5ea;
+            --text-secondary: #98989f;
+            --text-dim: #636366;
+            --toolbar-bg: #1e1e1e;
+            --timeline-bg: #181818;
+            --highlight: rgba(78, 142, 247, 0.15);
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            background: var(--bg-darkest);
+            color: var(--text);
+            font-family: 'Inter', 'Noto Sans JP', -apple-system, sans-serif;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        /* ── Toolbar ── */
+        .toolbar {
+            background: var(--toolbar-bg);
+            border-bottom: 1px solid #000;
+            padding: 0 16px;
+            height: 44px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            flex-shrink: 0;
+        }
+
+        .toolbar-left {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .toolbar-icon {
+            width: 26px;
+            height: 26px;
+            background: linear-gradient(135deg, var(--accent), var(--purple));
+            border-radius: 5px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 12px;
+            font-weight: 700;
+            color: #fff;
+        }
+
+        .toolbar-title {
+            font-size: 13px;
+            font-weight: 600;
+        }
+
+        .toolbar-title span {
+            color: var(--text-dim);
+            font-weight: 400;
+            margin-left: 6px;
+            font-size: 11px;
+        }
+
+        .toolbar-right {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .tb-btn {
+            background: var(--bg-surface);
+            border: 1px solid var(--border);
+            color: var(--text-secondary);
+            border-radius: 4px;
+            padding: 5px 12px;
+            font-size: 11px;
+            cursor: pointer;
+            font-family: inherit;
+            transition: all 0.12s;
+        }
+
+        .tb-btn:hover {
+            background: var(--bg-elevated);
+            color: var(--text);
+        }
+
+        .tb-btn.primary {
+            background: var(--accent);
+            color: #fff;
+            border-color: var(--accent);
+        }
+
+        .tb-btn.primary:hover {
+            background: var(--accent-hover);
+        }
+
+        .tb-btn:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+        }
+
+        /* ── Main ── */
+        .main-content {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        /* ── Video Area ── */
+        .video-area {
+            height: 40%;
+            min-height: 180px;
+            background: #000;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+            flex-shrink: 0;
+        }
+
+        .video-area video {
+            max-width: 100%;
+            max-height: 100%;
+            display: none;
+        }
+
+        .drop-overlay {
+            position: absolute;
+            inset: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            z-index: 2;
+            background: rgba(0, 0, 0, 0.85);
+            transition: opacity 0.2s;
+        }
+
+        .drop-overlay.hidden {
+            opacity: 0;
+            pointer-events: none;
+        }
+
+        .drop-boxes {
+            display: flex;
+            gap: 24px;
+        }
+
+        .drop-box {
+            width: 200px;
+            padding: 32px 20px;
+            border: 2px dashed var(--border);
+            border-radius: 12px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.15s;
+            position: relative;
+            background: rgba(26, 26, 26, 0.8);
+        }
+
+        .drop-box:hover {
+            border-color: var(--accent);
+            background: rgba(78, 142, 247, 0.05);
+        }
+
+        .drop-box.loaded {
+            border-color: var(--green);
+            border-style: solid;
+            background: rgba(66, 215, 125, 0.05);
+        }
+
+        .drop-box input {
+            position: absolute;
+            inset: 0;
+            opacity: 0;
+            cursor: pointer;
+        }
+
+        .drop-box-icon {
+            font-size: 28px;
+            margin-bottom: 10px;
+        }
+
+        .drop-box-label {
+            font-size: 12px;
+            color: var(--text-secondary);
+            font-weight: 500;
+        }
+
+        .drop-box-hint {
+            font-size: 10px;
+            color: var(--text-dim);
+            margin-top: 6px;
+        }
+
+        .drop-box-file {
+            font-size: 11px;
+            color: var(--green);
+            margin-top: 8px;
+            font-weight: 500;
+            word-break: break-all;
+        }
+
+        /* ── Video Controls ── */
+        .video-controls {
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            background: linear-gradient(transparent, rgba(0, 0, 0, 0.85));
+            padding: 24px 16px 10px;
+            display: none;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .vc-progress {
+            width: 100%;
+            height: 4px;
+            background: var(--bg-elevated);
+            border-radius: 2px;
+            cursor: pointer;
+        }
+
+        .vc-progress-fill {
+            height: 100%;
+            background: var(--accent);
+            border-radius: 2px;
+            width: 0%;
+            pointer-events: none;
+        }
+
+        .vc-bottom {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .vc-buttons {
+            display: flex;
+            align-items: center;
+            gap: 2px;
+        }
+
+        .vc-btn {
+            background: none;
+            border: none;
+            color: var(--text);
+            font-size: 16px;
+            cursor: pointer;
+            padding: 4px 8px;
+            border-radius: 4px;
+            line-height: 1;
+        }
+
+        .vc-btn:hover {
+            background: rgba(255, 255, 255, 0.1);
+        }
+
+        .vc-btn.small {
+            font-size: 11px;
+            color: var(--text-secondary);
+        }
+
+        .vc-time {
+            font-size: 11px;
+            color: var(--text-secondary);
+            font-family: 'Menlo', monospace;
+            font-variant-numeric: tabular-nums;
+        }
+
+        .subtitle-overlay {
+            position: absolute;
+            bottom: 60px;
+            left: 50%;
+            transform: translateX(-50%);
+            font-size: 18px;
+            font-weight: 600;
+            color: #fff;
+            text-shadow: 0 1px 4px rgba(0, 0, 0, 0.9), 0 0 12px rgba(0, 0, 0, 0.5);
+            text-align: center;
+            max-width: 80%;
+            pointer-events: none;
+            z-index: 3;
+            font-family: 'Noto Sans JP', sans-serif;
+            display: none;
+            line-height: 1.4;
+        }
+
+        /* ── Editor ── */
+        .editor-area {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            background: var(--timeline-bg);
+            border-top: 1px solid #000;
+            overflow: hidden;
+        }
+
+        .editor-toolbar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 6px 12px;
+            background: var(--bg-dark);
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+            flex-shrink: 0;
+        }
+
+        .editor-toolbar-left {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .editor-toolbar h3 {
+            font-size: 11px;
+            font-weight: 600;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+        }
+
+        .sub-count {
+            font-size: 10px;
+            background: var(--accent);
+            color: #fff;
+            padding: 1px 8px;
+            border-radius: 10px;
+            font-weight: 600;
+        }
+
+        .editor-scroll {
+            flex: 1;
+            overflow-y: auto;
+            scrollbar-width: thin;
+            scrollbar-color: var(--border) transparent;
+        }
+
+        .editor-scroll::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        .editor-scroll::-webkit-scrollbar-thumb {
+            background: var(--border);
+            border-radius: 3px;
+        }
+
+        .empty-editor {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--text-dim);
+            font-size: 12px;
+        }
+
+        /* ── Subtitle Row ── */
+        .sub-row {
+            display: flex;
+            align-items: stretch;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+            cursor: pointer;
+            transition: background 0.1s;
+            min-height: 36px;
+        }
+
+        .sub-row:hover {
+            background: rgba(255, 255, 255, 0.03);
+        }
+
+        .sub-row.active {
+            background: var(--highlight);
+        }
+
+        .sub-row.playing {
+            background: rgba(66, 215, 125, 0.1);
+        }
+
+        .sub-row .col-idx {
+            width: 36px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--text-dim);
+            font-size: 11px;
+            font-weight: 500;
+            flex-shrink: 0;
+        }
+
+        .sub-row .col-tc {
+            width: 110px;
+            display: flex;
+            align-items: center;
+            flex-shrink: 0;
+            padding: 3px 4px;
+        }
+
+        .sub-row .col-tc input {
+            width: 100%;
+            background: transparent;
+            border: 1px solid transparent;
+            color: var(--accent);
+            padding: 3px 6px;
+            border-radius: 3px;
+            font-family: 'Menlo', monospace;
+            font-size: 11px;
+            outline: none;
+            font-variant-numeric: tabular-nums;
+        }
+
+        .sub-row .col-tc input:focus {
+            background: var(--bg-mid);
+            border-color: var(--accent);
+            box-shadow: 0 0 0 2px var(--accent-glow);
+        }
+
+        .sub-row .col-text {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            padding: 3px 4px;
+            min-width: 0;
+        }
+
+        .sub-row .col-text input {
+            width: 100%;
+            background: transparent;
+            border: 1px solid transparent;
+            color: var(--text);
+            padding: 3px 8px;
+            border-radius: 3px;
+            font-family: 'Noto Sans JP', sans-serif;
+            font-size: 12px;
+            outline: none;
+        }
+
+        .sub-row .col-text input:focus {
+            background: var(--bg-mid);
+            border-color: var(--accent);
+            box-shadow: 0 0 0 2px var(--accent-glow);
+        }
+
+        .sub-row .col-actions {
+            width: 100px;
+            display: flex;
+            align-items: center;
+            justify-content: flex-end;
+            gap: 2px;
+            padding-right: 6px;
+            flex-shrink: 0;
+            opacity: 0;
+            transition: opacity 0.15s;
+        }
+
+        .sub-row:hover .col-actions,
+        .sub-row.active .col-actions {
+            opacity: 1;
+        }
+
+        .act-btn {
+            background: none;
+            border: 1px solid transparent;
+            color: var(--text-dim);
+            font-size: 10px;
+            cursor: pointer;
+            padding: 2px 5px;
+            border-radius: 3px;
+            font-family: inherit;
+            transition: all 0.1s;
+            white-space: nowrap;
+        }
+
+        .act-btn:hover {
+            background: var(--bg-elevated);
+            color: var(--text);
+            border-color: var(--border);
+        }
+
+        .act-btn.danger:hover {
+            background: rgba(255, 69, 58, 0.15);
+            color: var(--red);
+            border-color: rgba(255, 69, 58, 0.3);
+        }
+
+        /* ── Table header ── */
+        .sub-header {
+            display: flex;
+            align-items: center;
+            background: var(--bg-dark);
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+            font-size: 10px;
+            font-weight: 600;
+            color: var(--text-dim);
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            flex-shrink: 0;
+            min-height: 26px;
+        }
+
+        .sub-header .col-idx {
+            width: 36px;
+            text-align: center;
+            padding: 4px;
+        }
+
+        .sub-header .col-tc {
+            width: 110px;
+            padding: 4px 8px;
+        }
+
+        .sub-header .col-text {
+            flex: 1;
+            padding: 4px 8px;
+        }
+
+        .sub-header .col-actions {
+            width: 100px;
+            padding: 4px;
+            text-align: right;
+            padding-right: 8px;
+        }
+
+        /* ── Settings ── */
+        .settings-panel {
+            position: absolute;
+            top: 44px;
+            right: 8px;
+            background: var(--bg-elevated);
+            border: 1px solid var(--border-light);
+            border-radius: 8px;
+            padding: 16px;
+            width: 240px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+            display: none;
+            z-index: 200;
+        }
+
+        .settings-panel.show {
+            display: block;
+        }
+
+        .settings-panel .field {
+            margin-bottom: 12px;
+        }
+
+        .settings-panel .field:last-child {
+            margin-bottom: 0;
+        }
+
+        .settings-panel .field label {
+            display: block;
+            font-size: 10px;
+            font-weight: 600;
+            color: var(--text-dim);
+            margin-bottom: 4px;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .settings-panel .field select,
+        .settings-panel .field input {
+            width: 100%;
+            background: var(--bg-mid);
+            border: 1px solid var(--border);
+            color: var(--text);
+            padding: 5px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-family: inherit;
+            outline: none;
+            appearance: none;
+            -webkit-appearance: none;
+        }
+
+        .settings-panel .field select:focus,
+        .settings-panel .field input:focus {
+            border-color: var(--accent);
+        }
+
+        .settings-panel .select-wrap {
+            position: relative;
+        }
+
+        .settings-panel .select-wrap::after {
+            content: '▾';
+            position: absolute;
+            right: 8px;
+            top: 50%;
+            transform: translateY(-50%);
+            color: var(--text-dim);
+            pointer-events: none;
+            font-size: 9px;
+        }
+
+        .settings-panel .offset-row {
+            display: flex;
+            gap: 4px;
+            align-items: center;
+        }
+
+        .settings-panel .offset-row input {
+            flex: 1;
+        }
+
+        .settings-panel .offset-unit {
+            font-size: 10px;
+            color: var(--text-dim);
+        }
+
+        /* ── Toast ── */
+        .toast {
+            position: fixed;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            padding: 8px 20px;
+            border-radius: 6px;
+            font-size: 12px;
+            font-weight: 500;
+            z-index: 500;
+            transition: all 0.3s;
+            opacity: 0;
+            pointer-events: none;
+        }
+
+        .toast.show {
+            opacity: 1;
+        }
+
+        .toast.success {
+            background: var(--green);
+            color: #000;
+        }
+
+        .toast.error {
+            background: var(--red);
+            color: #fff;
+        }
+    </style>
+</head>
+
+<body>
+    <!-- Toolbar -->
+    <div class="toolbar">
+        <div class="toolbar-left">
+            <div class="toolbar-icon">S</div>
+            <div class="toolbar-title">SRT Editor <span>→ FCPXML</span></div>
+        </div>
+        <div class="toolbar-right">
+            <button class="tb-btn" onclick="addSubtitle()">＋ 字幕追加</button>
+            <button class="tb-btn" onclick="saveProject()" title="プロジェクトをJSONで保存">💾 保存</button>
+            <button class="tb-btn" onclick="document.getElementById('projectInput').click()" title="プロジェクトを読み込み">📂
+                開く</button>
+            <button class="tb-btn" id="settingsBtn" onclick="toggleSettings()">⚙ 設定</button>
+            <button class="tb-btn primary" id="exportBtn" onclick="exportFCPXML()" disabled>↓ FCPXML書き出し</button>
+            <input type="file" id="projectInput" accept=".json" style="display:none" />
+        </div>
+    </div>
+
+    <!-- Settings -->
+    <div class="settings-panel" id="settingsPanel">
+        <div class="field">
+            <label>フレームレート</label>
+            <div class="select-wrap">
+                <select id="fps">
+                    <option value="24000/1001">23.976 fps</option>
+                    <option value="24/1">24 fps</option>
+                    <option value="25/1">25 fps</option>
+                    <option value="30000/1001">29.97 fps</option>
+                    <option value="30/1" selected>30 fps</option>
+                    <option value="60000/1001">59.94 fps</option>
+                    <option value="60/1">60 fps</option>
+                </select>
+            </div>
+        </div>
+        <div class="field">
+            <label>解像度</label>
+            <div class="select-wrap">
+                <select id="resolution">
+                    <option value="1920x1080" selected>1920×1080 (FHD)</option>
+                    <option value="3840x2160">3840×2160 (4K)</option>
+                    <option value="2560x1440">2560×1440 (QHD)</option>
+                    <option value="1280x720">1280×720 (HD)</option>
+                    <option value="1080x1920">1080×1920 (縦型FHD)</option>
+                    <option value="1080x1350">1080×1350 (縦型4:5)</option>
+                </select>
+            </div>
+        </div>
+        <div class="field">
+            <label>字幕の縦位置</label>
+            <div class="select-wrap">
+                <select id="verticalPos">
+                    <option value="-85">下寄せ（標準）</option>
+                    <option value="0">中央</option>
+                    <option value="85">上寄せ</option>
+                </select>
+            </div>
+        </div>
+        <div class="field">
+            <label>エンコーディング</label>
+            <div class="select-wrap">
+                <select id="encoding">
+                    <option value="UTF-8">UTF-8</option>
+                    <option value="Shift_JIS">Shift-JIS</option>
+                    <option value="EUC-JP">EUC-JP</option>
+                </select>
+            </div>
+        </div>
+        <div class="field">
+            <label
+                style="display:flex; align-items:center; gap:6px; cursor:pointer; text-transform:none; letter-spacing:0;">
+                <input type="checkbox" id="removePunctuation" checked style="width:auto; margin:0;" />
+                <span style="font-size:11px; color:var(--text-secondary);">句読点を自動削除（。、！？）</span>
+            </label>
+        </div>
+        <div class="field">
+            <label>フレームオフセット</label>
+            <div class="offset-row">
+                <input type="number" id="frameOffset" value="0" step="1" />
+                <span class="offset-unit">フレーム</span>
+            </div>
+        </div>
+    </div>
+
+    <div class="main-content">
+        <!-- Video -->
+        <div class="video-area" id="videoArea">
+            <video id="videoPlayer" preload="auto"></video>
+            <div class="subtitle-overlay" id="subtitleOverlay"></div>
+            <div class="drop-overlay" id="dropOverlay">
+                <div class="drop-hint-top" style="font-size:12px; color:var(--text-secondary); margin-bottom:16px;">
+                    動画とSRTを同時にドロップできます</div>
+                <div class="drop-boxes">
+                    <div class="drop-box" id="dropVideo" onclick="document.getElementById('videoInput').click()">
+                        <div class="drop-box-icon">🎬</div>
+                        <div class="drop-box-label">動画ファイル</div>
+                        <div class="drop-box-hint">MP4 / WebM / MOV</div>
+                        <div class="drop-box-file" id="videoFileName"></div>
+                    </div>
+                    <div class="drop-box" id="dropSrt" onclick="document.getElementById('srtInput').click()">
+                        <div class="drop-box-icon">📄</div>
+                        <div class="drop-box-label">SRTファイル</div>
+                        <div class="drop-box-hint">.srt 字幕ファイル</div>
+                        <div class="drop-box-file" id="srtFileName"></div>
+                    </div>
+                </div>
+                <input type="file" accept="video/*" id="videoInput" style="display:none" />
+                <input type="file" accept=".srt" id="srtInput" style="display:none" />
+            </div>
+            <div class="video-controls" id="videoControls">
+                <div class="vc-progress" id="progressBar">
+                    <div class="vc-progress-fill" id="progressFill"></div>
+                </div>
+                <div class="vc-bottom">
+                    <div class="vc-buttons">
+                        <button class="vc-btn small" onclick="seekRel(-5)">◁◁</button>
+                        <button class="vc-btn small" onclick="seekRel(-1)">◁</button>
+                        <button class="vc-btn" id="playBtn" onclick="togglePlay()">▶</button>
+                        <button class="vc-btn small" onclick="seekRel(1)">▷</button>
+                        <button class="vc-btn small" onclick="seekRel(5)">▷▷</button>
+                    </div>
+                    <div class="vc-time"><span id="curTime">00:00:00.000</span> / <span id="totTime">00:00:00.000</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Editor -->
+        <div class="editor-area">
+            <div class="editor-toolbar">
+                <div class="editor-toolbar-left">
+                    <h3>字幕エディタ</h3>
+                    <span class="sub-count" id="subCount">0</span>
+                </div>
+                <div style="font-size:10px; color:var(--text-dim);">
+                    クリックで選択 · 各フィールドをクリックして直接編集
+                </div>
+            </div>
+            <div class="sub-header">
+                <div class="col-idx">#</div>
+                <div class="col-tc">IN</div>
+                <div class="col-tc">OUT</div>
+                <div class="col-text">テキスト</div>
+                <div class="col-actions">操作</div>
+            </div>
+            <div class="editor-scroll" id="editorScroll">
+                <div class="empty-editor" id="emptyEditor">SRTファイルをドロップして読み込んでください</div>
+                <div id="subList"></div>
+            </div>
+        </div>
+    </div>
+
+    <div class="toast" id="toast"></div>
+
+    <script>
+        // ═══ STATE ═══
+        let subs = [];
+        let selectedIdx = -1;
+        let playingIdx = -1;
+        let srtFileName = '';
+        const STORAGE_KEY = 'srt-editor-autosave';
+        const video = document.getElementById('videoPlayer');
+
+        // ═══ FILE LOADING ═══
+        function handleDroppedFiles(files) {
+            for (const f of files) {
+                if (f.name.toLowerCase().endsWith('.srt')) loadSrt(f);
+                else if (f.type.startsWith('video/') || /\.(mp4|mov|webm|m4v|avi|mkv)$/i.test(f.name)) loadVideo(f);
+            }
+        }
+
+        // ドロップはどこに落としても動作
+        document.addEventListener('dragover', e => {
+            e.preventDefault();
+            const overlay = document.getElementById('dropOverlay');
+            if (!overlay.classList.contains('hidden')) overlay.classList.add('drag-active');
+        });
+        document.addEventListener('dragleave', e => {
+            if (!e.relatedTarget || e.relatedTarget === document) {
+                document.getElementById('dropOverlay').classList.remove('drag-active');
+            }
+        });
+        document.addEventListener('drop', e => {
+            e.preventDefault();
+            document.getElementById('dropOverlay').classList.remove('drag-active');
+            if (e.dataTransfer.files.length > 0) handleDroppedFiles(e.dataTransfer.files);
+        });
+        document.getElementById('videoInput').addEventListener('change', e => { if (e.target.files[0]) loadVideo(e.target.files[0]); });
+        document.getElementById('srtInput').addEventListener('change', e => { if (e.target.files[0]) loadSrt(e.target.files[0]); });
+
+        function loadVideo(file) {
+            video.src = URL.createObjectURL(file);
+            video.style.display = 'block';
+            video.load();
+            document.getElementById('videoFileName').textContent = file.name;
+            document.getElementById('dropVideo').classList.add('loaded');
+            document.getElementById('videoControls').style.display = 'flex';
+            checkOverlay();
+        }
+
+        function loadSrt(file) {
+            const enc = document.getElementById('encoding').value;
+            const reader = new FileReader();
+            reader.onload = e => {
+                srtFileName = file.name.replace(/\.srt$/i, '');
+                subs = parseSRT(e.target.result);
+                document.getElementById('srtFileName').textContent = file.name;
+                document.getElementById('dropSrt').classList.add('loaded');
+                if (subs.length > 0) {
+                    renderAll();
+                    document.getElementById('exportBtn').disabled = false;
+                    toast('success', `${subs.length} 件の字幕を読み込みました`);
+                } else {
+                    toast('error', '字幕が見つかりません');
+                }
+                checkOverlay();
+            };
+            reader.readAsText(file, enc);
+        }
+
+        function checkOverlay() {
+            if ((video.src && video.src !== '') && subs.length > 0)
+                document.getElementById('dropOverlay').classList.add('hidden');
+        }
+
+        // ═══ SRT PARSER ═══
+        function tcToMs(tc) {
+            const m = tc.trim().match(/(\d+):(\d+):(\d+)[,.](\d+)/);
+            if (!m) return 0;
+            return (+m[1]) * 3600000 + (+m[2]) * 60000 + (+m[3]) * 1000 + +m[4].padEnd(3, '0').slice(0, 3);
+        }
+
+        function parseSRT(text) {
+            const r = [];
+            const blocks = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').trim().split(/\n\s*\n/);
+            for (const b of blocks) {
+                const lines = b.trim().split('\n');
+                let tc = -1;
+                for (let i = 0; i < lines.length; i++) { if (lines[i].includes('-->')) { tc = i; break; } }
+                if (tc < 0) continue;
+                const parts = lines[tc].split('-->');
+                if (parts.length < 2) continue;
+                const start = tcToMs(parts[0]), end = tcToMs(parts[1]);
+                let txt = lines.slice(tc + 1).map(l => l.trim()).join('\n').trim();
+                if (document.getElementById('removePunctuation').checked) {
+                    txt = txt.replace(/[。、！？!?，．]/g, '');
+                }
+                if (txt && end > start) r.push({ start, end, text: txt });
+            }
+            return r;
+        }
+
+        // ═══ RENDER ═══
+        function msToTC(ms) {
+            if (ms < 0) ms = 0;
+            const h = Math.floor(ms / 3600000);
+            const m = Math.floor((ms % 3600000) / 60000);
+            const s = Math.floor((ms % 60000) / 1000);
+            const f = ms % 1000;
+            return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')},${String(f).padStart(3, '0')}`;
+        }
+
+        function renderAll() {
+            const list = document.getElementById('subList');
+            const empty = document.getElementById('emptyEditor');
+            document.getElementById('subCount').textContent = subs.length;
+
+            if (subs.length === 0) {
+                list.innerHTML = '';
+                empty.style.display = 'flex';
+                return;
+            }
+            empty.style.display = 'none';
+
+            list.innerHTML = subs.map((s, i) => `
+        <div class="sub-row ${i === selectedIdx ? 'active' : ''} ${i === playingIdx ? 'playing' : ''}"
+             id="row-${i}" onclick="selectRow(${i})" ondblclick="seekTo(${i})">
+          <div class="col-idx">${i + 1}</div>
+          <div class="col-tc">
+            <input type="text" value="${msToTC(s.start)}"
+              onclick="event.stopPropagation()"
+              onchange="updateTC(${i},'start',this.value)"
+              onfocus="this.select()" />
+          </div>
+          <div class="col-tc">
+            <input type="text" value="${msToTC(s.end)}"
+              onclick="event.stopPropagation()"
+              onchange="updateTC(${i},'end',this.value)"
+              onfocus="this.select()" />
+          </div>
+          <div class="col-text">
+            <input type="text" value="${escAttr(s.text.replace(/\n/g, ' '))}"
+              onclick="event.stopPropagation()"
+              onchange="updateText(${i},this.value)"
+              onfocus="this.select()" />
+          </div>
+          <div class="col-actions">
+            <button class="act-btn" onclick="event.stopPropagation(); setIn(${i})" title="INを動画位置に">IN⏎</button>
+            <button class="act-btn" onclick="event.stopPropagation(); setOut(${i})" title="OUTを動画位置に">OUT⏎</button>
+            <button class="act-btn" onclick="event.stopPropagation(); splitRow(${i})" title="動画位置で分割">✂</button>
+            <button class="act-btn" onclick="event.stopPropagation(); mergeRow(${i})" title="次の字幕と結合">⊕</button>
+            <button class="act-btn danger" onclick="event.stopPropagation(); deleteRow(${i})" title="削除">✕</button>
+          </div>
+        </div>
+      `).join('');
+        }
+
+        function escAttr(s) { return s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;'); }
+
+        function selectRow(i) { selectedIdx = i; renderAll(); }
+
+        function updateTC(i, field, val) { subs[i][field] = tcToMs(val); autoSave(); }
+        function updateText(i, val) { subs[i].text = val; autoSave(); }
+
+        // ═══ OPERATIONS ═══
+        function deleteRow(i) {
+            subs.splice(i, 1);
+            if (selectedIdx >= subs.length) selectedIdx = subs.length - 1;
+            renderAll();
+            toast('success', '削除しました');
+        }
+
+        function mergeRow(i) {
+            if (i >= subs.length - 1) { toast('error', '最後の字幕は結合できません'); return; }
+            subs[i].end = subs[i + 1].end;
+            subs[i].text = subs[i].text + ' ' + subs[i + 1].text;
+            subs.splice(i + 1, 1);
+            renderAll();
+            toast('success', '結合しました');
+        }
+
+        function splitRow(i) {
+            const s = subs[i];
+
+            // テキストのカーソル位置を取得
+            const row = document.getElementById(`row-${i}`);
+            const textInput = row ? row.querySelector('.col-text input') : null;
+            const cursorPos = textInput ? textInput.selectionStart : -1;
+            const fullText = s.text.replace(/\n/g, ' ');
+
+            let textBefore = fullText;
+            let textAfter = fullText;
+            let splitRatio = 0.5;
+
+            if (cursorPos > 0 && cursorPos < fullText.length) {
+                // カーソル位置でテキストを分割
+                textBefore = fullText.slice(0, cursorPos).trim();
+                textAfter = fullText.slice(cursorPos).trim();
+                splitRatio = cursorPos / fullText.length;
+            }
+
+            if (!textBefore) textBefore = fullText;
+            if (!textAfter) textAfter = fullText;
+
+            // タイムコードをテキスト比率で按分
+            const duration = s.end - s.start;
+            const splitMs = Math.round(s.start + duration * splitRatio);
+
+            if (splitMs <= s.start || splitMs >= s.end) { toast('error', '分割位置が範囲外です'); return; }
+
+            const newSub = { start: splitMs, end: s.end, text: textAfter };
+            s.end = splitMs;
+            s.text = textBefore;
+            subs.splice(i + 1, 0, newSub);
+            renderAll();
+            toast('success', 'カーソル位置で分割しました');
+        }
+
+        function setIn(i) {
+            if (!video.src || isNaN(video.currentTime)) { toast('error', '動画を読み込んでください'); return; }
+            subs[i].start = Math.round(video.currentTime * 1000);
+            renderAll();
+        }
+
+        function setOut(i) {
+            if (!video.src || isNaN(video.currentTime)) { toast('error', '動画を読み込んでください'); return; }
+            subs[i].end = Math.round(video.currentTime * 1000);
+            renderAll();
+        }
+
+        function addSubtitle() {
+            const lastEnd = subs.length > 0 ? subs[subs.length - 1].end : 0;
+            subs.push({ start: lastEnd, end: lastEnd + 2000, text: '新しい字幕' });
+            selectedIdx = subs.length - 1;
+            renderAll();
+            document.getElementById('exportBtn').disabled = false;
+            scrollToRow(selectedIdx);
+        }
+
+        function scrollToRow(i) {
+            const row = document.getElementById(`row-${i}`);
+            if (row) row.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        }
+
+        // ═══ VIDEO CONTROLS ═══
+        function togglePlay() { if (video.paused) video.play(); else video.pause(); }
+        function seekRel(sec) { video.currentTime = Math.max(0, Math.min(video.duration || 0, video.currentTime + sec)); }
+        function seekTo(i) { if (video.src) video.currentTime = subs[i].start / 1000; }
+
+        video.addEventListener('play', () => document.getElementById('playBtn').textContent = '❚❚');
+        video.addEventListener('pause', () => document.getElementById('playBtn').textContent = '▶');
+
+        video.addEventListener('timeupdate', () => {
+            const cur = video.currentTime, dur = video.duration || 1;
+            document.getElementById('progressFill').style.width = (cur / dur * 100) + '%';
+            document.getElementById('curTime').textContent = secToTC(cur);
+
+            const curMs = Math.round(cur * 1000);
+            let found = -1;
+            for (let i = 0; i < subs.length; i++) {
+                if (curMs >= subs[i].start && curMs < subs[i].end) { found = i; break; }
+            }
+            const overlay = document.getElementById('subtitleOverlay');
+            if (found >= 0) {
+                overlay.textContent = subs[found].text.replace(/<[^>]+>/g, '');
+                overlay.style.display = 'block';
+            } else { overlay.style.display = 'none'; }
+
+            if (found !== playingIdx) {
+                playingIdx = found;
+                // Update playing highlight without full re-render
+                document.querySelectorAll('.sub-row.playing').forEach(el => el.classList.remove('playing'));
+                if (found >= 0) {
+                    const row = document.getElementById(`row-${found}`);
+                    if (row) {
+                        row.classList.add('playing');
+                        const container = document.getElementById('editorScroll');
+                        const rr = row.getBoundingClientRect(), cr = container.getBoundingClientRect();
+                        if (rr.bottom > cr.bottom || rr.top < cr.top) row.scrollIntoView({ block: 'center', behavior: 'smooth' });
+                    }
+                }
+            }
+        });
+
+        video.addEventListener('loadedmetadata', () => {
+            document.getElementById('totTime').textContent = secToTC(video.duration);
+        });
+
+        document.getElementById('progressBar').addEventListener('click', e => {
+            const rect = e.currentTarget.getBoundingClientRect();
+            video.currentTime = ((e.clientX - rect.left) / rect.width) * (video.duration || 0);
+        });
+
+        function secToTC(s) {
+            const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = Math.floor(s % 60), ms = Math.round((s % 1) * 1000);
+            return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}.${String(ms).padStart(3, '0')}`;
+        }
+
+        // ═══ KEYBOARD ═══
+        document.addEventListener('keydown', e => {
+            if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') return;
+            if (e.key === ' ') { e.preventDefault(); togglePlay(); }
+            if (e.key === 'ArrowLeft') { e.preventDefault(); seekRel(e.shiftKey ? -5 : -1); }
+            if (e.key === 'ArrowRight') { e.preventDefault(); seekRel(e.shiftKey ? 5 : 1); }
+            if (e.key === 'ArrowUp' && selectedIdx > 0) { e.preventDefault(); selectRow(selectedIdx - 1); scrollToRow(selectedIdx); }
+            if (e.key === 'ArrowDown' && selectedIdx < subs.length - 1) { e.preventDefault(); selectRow(selectedIdx + 1); scrollToRow(selectedIdx); }
+            if (e.key === 'Delete' && selectedIdx >= 0) { e.preventDefault(); deleteRow(selectedIdx); }
+            if (e.key === 'Enter' && selectedIdx >= 0) { e.preventDefault(); seekTo(selectedIdx); }
+        });
+
+        // ═══ SETTINGS ═══
+        function toggleSettings() { document.getElementById('settingsPanel').classList.toggle('show'); }
+        document.addEventListener('click', e => {
+            const p = document.getElementById('settingsPanel'), b = document.getElementById('settingsBtn');
+            if (!p.contains(e.target) && !b.contains(e.target)) p.classList.remove('show');
+        });
+
+        // ═══ FCPXML EXPORT ═══
+        function gcd(a, b) {
+            a = a < 0n ? -a : a; b = b < 0n ? -b : b;
+            while (b) { [a, b] = [b, a % b]; } return a;
+        }
+
+        function msToFCPTime(ms, fpsNum, fpsDen) {
+            if (ms <= 0) return '0/1s';
+            const msBI = BigInt(Math.round(ms)), numBI = BigInt(fpsNum), denBI = BigInt(fpsDen);
+            const frames = (msBI * numBI + denBI * 500n) / (denBI * 1000n);
+            const tN = frames * denBI, tD = numBI;
+            const g = gcd(tN < 0n ? -tN : tN, tD);
+            return `${tN / g}/${tD / g}s`;
+        }
+
+        function exportFCPXML() {
+            if (subs.length === 0) return;
+            const fpsVal = document.getElementById('fps').value;
+            const [fpsNum, fpsDen] = fpsVal.split('/').map(Number);
+            const frameOffset = parseInt(document.getElementById('frameOffset').value || '0');
+            const offsetMs = Math.round(frameOffset * (fpsDen / fpsNum) * 1000);
+            const vPos = document.getElementById('verticalPos').value;
+            const name = srtFileName || 'Subtitles';
+            const [width, height] = document.getElementById('resolution').value.split('x');
+            const frameDur = `${fpsDen}/${fpsNum}s`;
+            const adj = subs.map(s => ({ start: Math.max(0, s.start + offsetMs), end: Math.max(0, s.end + offsetMs), text: s.text })).filter(s => s.end > s.start);
+            const totalMs = Math.max(...adj.map(s => s.end)) + 2000;
+            const totalTime = msToFCPTime(totalMs, fpsNum, fpsDen);
+            const isDF = (fpsNum === 30000 && fpsDen === 1001) || (fpsNum === 60000 && fpsDen === 1001);
+            const fpsMap = { '24000/1001': '2398', '24/1': '24', '25/1': '25', '30000/1001': '2997', '30/1': '30', '60000/1001': '5994', '60/1': '60' };
+            const fpsStr = fpsMap[fpsVal] || String(Math.round(fpsNum / fpsDen));
+            const posP = vPos !== '0' ? `\n                    <param name="Position" key="9999/999166631/999166633/2/100/101" value="0 ${vPos}"/>` : '';
+            const UID = '.../Titles.localized/Bumper:Opener.localized/Basic Title.localized/Basic Title.moti';
+            const esc = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+            const clips = adj.map((s, i) => {
+                const o = msToFCPTime(s.start, fpsNum, fpsDen), d = msToFCPTime(s.end - s.start, fpsNum, fpsDen);
+                const t = s.text.replace(/<[^>]+>/g, '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+                return `                <title name="Subtitle ${i + 1}" ref="r2" offset="${o}" duration="${d}" start="0s" lane="1">${posP}
+                    <text><text-style ref="ts${i}">${t}</text-style></text>
+                    <text-style-def id="ts${i}"><text-style font="Helvetica Neue" fontSize="52" fontFace="Bold" fontColor="1 1 1 1" strokeColor="0 0 0 1" strokeWidth="3" baseline="0" alignment="center"/></text-style-def>
+                </title>`;
+            }).join('\n');
+            const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE fcpxml>
+<fcpxml version="1.9">
+    <resources>
+        <format id="r1" name="FFVideoFormat${height}p${fpsStr}" frameDuration="${frameDur}" width="${width}" height="${height}" colorSpace="1-1-1 (Rec. 709)"/>
+        <effect id="r2" name="Basic Title" uid="${UID}"/>
+    </resources>
+    <library>
+        <event name="${esc(name)}">
+            <project name="${esc(name)}">
+                <sequence format="r1" duration="${totalTime}" tcStart="0s" tcFormat="${isDF ? 'DF' : 'NDF'}" audioLayout="stereo" audioRate="48k">
+                    <spine>
+                        <gap name="Gap" offset="0s" duration="${totalTime}" start="0s">
+${clips}
+                        </gap>
+                    </spine>
+                </sequence>
+            </project>
+        </event>
+    </library>
+</fcpxml>`;
+            const blob = new Blob([xml], { type: 'application/xml' });
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = name + '.fcpxml';
+            a.click();
+            URL.revokeObjectURL(a.href);
+            toast('success', `✓ ${adj.length} 件をFCPXMLに書き出しました`);
+        }
+
+        // ═══ TOAST ═══
+        let toastT;
+        function toast(type, msg) {
+            const el = document.getElementById('toast');
+            el.className = 'toast ' + type + ' show';
+            el.textContent = msg;
+            clearTimeout(toastT);
+            toastT = setTimeout(() => el.classList.remove('show'), 2500);
+        }
+
+        // ═══ AUTO-SAVE (localStorage) ═══
+        function autoSave() {
+            try {
+                const data = {
+                    subs,
+                    srtFileName,
+                    settings: {
+                        fps: document.getElementById('fps').value,
+                        resolution: document.getElementById('resolution').value,
+                        verticalPos: document.getElementById('verticalPos').value,
+                        encoding: document.getElementById('encoding').value,
+                        timeOffset: document.getElementById('frameOffset').value
+                    },
+                    savedAt: new Date().toISOString()
+                };
+                localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+            } catch (e) { /* storage full or unavailable */ }
+        }
+
+        function autoRestore() {
+            try {
+                const raw = localStorage.getItem(STORAGE_KEY);
+                if (!raw) return;
+                const data = JSON.parse(raw);
+                if (!data.subs || data.subs.length === 0) return;
+                const time = data.savedAt ? new Date(data.savedAt).toLocaleString('ja-JP') : '';
+                if (confirm(`前回の編集データがあります（${data.subs.length}件 · ${time}）\n復元しますか？`)) {
+                    restoreData(data);
+                }
+            } catch (e) { /* corrupt data */ }
+        }
+
+        function restoreData(data) {
+            subs = data.subs || [];
+            srtFileName = data.srtFileName || '';
+            if (data.settings) {
+                if (data.settings.fps) document.getElementById('fps').value = data.settings.fps;
+                if (data.settings.resolution) document.getElementById('resolution').value = data.settings.resolution;
+                if (data.settings.verticalPos) document.getElementById('verticalPos').value = data.settings.verticalPos;
+                if (data.settings.encoding) document.getElementById('encoding').value = data.settings.encoding;
+                if (data.settings.timeOffset) document.getElementById('frameOffset').value = data.settings.timeOffset;
+            }
+            if (subs.length > 0) {
+                renderAll();
+                document.getElementById('exportBtn').disabled = false;
+            }
+        }
+
+        function clearAutoSave() {
+            try { localStorage.removeItem(STORAGE_KEY); } catch (e) { }
+        }
+
+        // ═══ PROJECT SAVE/LOAD (JSON file) ═══
+        function saveProject() {
+            if (subs.length === 0) { toast('error', '保存する字幕がありません'); return; }
+            const data = {
+                version: 1,
+                subs,
+                srtFileName,
+                settings: {
+                    fps: document.getElementById('fps').value,
+                    resolution: document.getElementById('resolution').value,
+                    verticalPos: document.getElementById('verticalPos').value,
+                    encoding: document.getElementById('encoding').value,
+                    timeOffset: document.getElementById('frameOffset').value
+                },
+                savedAt: new Date().toISOString()
+            };
+            const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = (srtFileName || 'project') + '.srt-editor.json';
+            a.click();
+            URL.revokeObjectURL(a.href);
+            toast('success', '💾 プロジェクトを保存しました');
+        }
+
+        document.getElementById('projectInput').addEventListener('change', e => {
+            const file = e.target.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = ev => {
+                try {
+                    const data = JSON.parse(ev.target.result);
+                    if (!data.subs || !Array.isArray(data.subs)) throw new Error('invalid');
+                    restoreData(data);
+                    toast('success', `📂 ${data.subs.length} 件の字幕を復元しました`);
+                } catch (err) {
+                    toast('error', 'プロジェクトファイルの読み込みに失敗しました');
+                }
+            };
+            reader.readAsText(file);
+            e.target.value = '';
+        });
+
+        // Hook auto-save into operations that modify subs
+        const _origRenderAll = renderAll;
+        renderAll = function () { _origRenderAll(); autoSave(); };
+
+        // Restore on page load
+        autoRestore();
+    </script>
+</body>
+
+</html>

@@ -1,0 +1,1179 @@
+<!DOCTYPE html>
+<html lang="ja">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SRT → FCPXML Converter</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Noto+Sans+JP:wght@300;400;500;700&display=swap');
+
+    :root {
+      --bg-darkest: #111111;
+      --bg-dark: #1a1a1a;
+      --bg-mid: #222222;
+      --bg-surface: #2a2a2a;
+      --bg-elevated: #333333;
+      --border: #3a3a3a;
+      --border-light: #444444;
+      --accent: #4e8ef7;
+      --accent-hover: #6ba0ff;
+      --accent-glow: rgba(78, 142, 247, 0.3);
+      --purple: #a77bfa;
+      --green: #42d77d;
+      --orange: #ff9f0a;
+      --red: #ff453a;
+      --text: #e5e5ea;
+      --text-secondary: #98989f;
+      --text-dim: #636366;
+      --toolbar-bg: #1e1e1e;
+      --timeline-bg: #181818;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      background: var(--bg-darkest);
+      color: var(--text);
+      font-family: 'Inter', 'Noto Sans JP', -apple-system, BlinkMacSystemFont, sans-serif;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ── Toolbar ── */
+    .toolbar {
+      background: var(--toolbar-bg);
+      border-bottom: 1px solid #000;
+      padding: 0 20px;
+      height: 52px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      box-shadow: 0 1px 0 rgba(255, 255, 255, 0.04);
+    }
+
+    .toolbar-left {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .toolbar-icon {
+      width: 28px;
+      height: 28px;
+      background: linear-gradient(135deg, var(--accent), var(--purple));
+      border-radius: 6px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 14px;
+      font-weight: 700;
+      color: #fff;
+      box-shadow: 0 2px 8px rgba(78, 142, 247, 0.3);
+    }
+
+    .toolbar-title {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text);
+      letter-spacing: -0.01em;
+    }
+
+    .toolbar-title span {
+      color: var(--text-secondary);
+      font-weight: 400;
+      margin-left: 6px;
+      font-size: 12px;
+    }
+
+    .toolbar-right {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .toolbar-badge {
+      font-size: 11px;
+      color: var(--text-dim);
+      background: var(--bg-surface);
+      padding: 3px 10px;
+      border-radius: 4px;
+      font-weight: 500;
+      border: 1px solid var(--border);
+    }
+
+    /* ── Main Layout ── */
+    .main-layout {
+      display: flex;
+      flex: 1;
+      overflow: hidden;
+    }
+
+    /* ── Inspector ── */
+    .inspector {
+      width: 280px;
+      min-width: 280px;
+      background: var(--bg-dark);
+      border-right: 1px solid #000;
+      display: flex;
+      flex-direction: column;
+      overflow-y: auto;
+    }
+
+    .inspector-header {
+      padding: 14px 16px 10px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .inspector-header-icon {
+      font-size: 14px;
+      opacity: 0.6;
+    }
+
+    .inspector-header h2 {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--text-secondary);
+    }
+
+    .inspector-section {
+      padding: 16px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    }
+
+    .inspector-section-title {
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--text-secondary);
+      margin-bottom: 12px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .inspector-section-title .dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--accent);
+    }
+
+    .field {
+      margin-bottom: 12px;
+    }
+
+    .field:last-child {
+      margin-bottom: 0;
+    }
+
+    .field label {
+      display: block;
+      font-size: 11px;
+      font-weight: 500;
+      color: var(--text-dim);
+      margin-bottom: 5px;
+      letter-spacing: 0.02em;
+    }
+
+    .field select,
+    .field input[type="text"],
+    .field input[type="number"] {
+      width: 100%;
+      background: var(--bg-mid);
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 7px 10px;
+      border-radius: 5px;
+      font-size: 12px;
+      font-family: 'Inter', 'Noto Sans JP', sans-serif;
+      appearance: none;
+      -webkit-appearance: none;
+      transition: all 0.15s;
+      outline: none;
+    }
+
+    .field select {
+      cursor: pointer;
+    }
+
+    .field input[type="number"] {
+      -moz-appearance: textfield;
+    }
+
+    .field input[type="number"]::-webkit-outer-spin-button,
+    .field input[type="number"]::-webkit-inner-spin-button {
+      -webkit-appearance: none;
+      margin: 0;
+    }
+
+    .field select:hover,
+    .field input:hover {
+      border-color: var(--border-light);
+    }
+
+    .field select:focus,
+    .field input:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 2px var(--accent-glow);
+    }
+
+    .select-wrap {
+      position: relative;
+    }
+
+    .select-wrap::after {
+      content: '▾';
+      position: absolute;
+      right: 10px;
+      top: 50%;
+      transform: translateY(-50%);
+      color: var(--text-dim);
+      pointer-events: none;
+      font-size: 10px;
+    }
+
+    .offset-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .offset-row input {
+      flex: 1;
+    }
+
+    .offset-row .offset-unit {
+      font-size: 11px;
+      color: var(--text-dim);
+      white-space: nowrap;
+    }
+
+    /* ── Content Area ── */
+    .content-area {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+    }
+
+    /* ── Viewer ── */
+    .viewer {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      background: var(--bg-darkest);
+      position: relative;
+      min-height: 280px;
+    }
+
+    .viewer-bg-grid {
+      position: absolute;
+      inset: 0;
+      background-image:
+        linear-gradient(rgba(255, 255, 255, 0.015) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255, 255, 255, 0.015) 1px, transparent 1px);
+      background-size: 40px 40px;
+      pointer-events: none;
+    }
+
+    .drop-zone {
+      position: relative;
+      z-index: 1;
+      border: 2px dashed var(--border);
+      border-radius: 12px;
+      padding: 48px 40px;
+      text-align: center;
+      cursor: pointer;
+      transition: all 0.2s;
+      width: min(90%, 420px);
+      background: rgba(26, 26, 26, 0.6);
+      backdrop-filter: blur(16px);
+    }
+
+    .drop-zone:hover,
+    .drop-zone.drag-over {
+      border-color: var(--accent);
+      background: rgba(78, 142, 247, 0.05);
+      box-shadow: 0 0 40px rgba(78, 142, 247, 0.08);
+    }
+
+    .drop-zone.has-file {
+      border-color: var(--green);
+      border-style: solid;
+      background: rgba(66, 215, 125, 0.04);
+    }
+
+    .drop-zone input[type="file"] {
+      position: absolute;
+      inset: 0;
+      opacity: 0;
+      cursor: pointer;
+      width: 100%;
+      height: 100%;
+    }
+
+    .drop-icon {
+      width: 56px;
+      height: 56px;
+      margin: 0 auto 16px;
+      background: linear-gradient(135deg, var(--bg-surface), var(--bg-elevated));
+      border-radius: 14px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 24px;
+      border: 1px solid var(--border);
+    }
+
+    .drop-text {
+      font-size: 13px;
+      color: var(--text-secondary);
+      font-weight: 400;
+      line-height: 1.6;
+    }
+
+    .drop-text strong {
+      color: var(--text);
+      font-weight: 500;
+    }
+
+    .drop-hint {
+      margin-top: 8px;
+      font-size: 11px;
+      color: var(--text-dim);
+    }
+
+    .file-list {
+      margin-top: 16px;
+      display: none;
+      flex-direction: column;
+      gap: 6px;
+      width: min(90%, 420px);
+      position: relative;
+      z-index: 1;
+    }
+
+    .file-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 7px 12px;
+      background: rgba(66, 215, 125, 0.08);
+      border: 1px solid rgba(66, 215, 125, 0.2);
+      border-radius: 6px;
+      font-size: 12px;
+      color: var(--green);
+      font-weight: 500;
+    }
+
+    .file-item .file-name-text {
+      flex: 1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .file-item .file-remove {
+      background: none;
+      border: none;
+      color: var(--text-dim);
+      font-size: 14px;
+      cursor: pointer;
+      padding: 0 4px;
+      transition: color 0.15s;
+    }
+
+    .file-item .file-remove:hover {
+      color: var(--red);
+    }
+
+    .file-item .file-count {
+      font-size: 10px;
+      color: var(--text-dim);
+      margin-left: 8px;
+      white-space: nowrap;
+    }
+
+    /* ── Timeline ── */
+    .timeline-panel {
+      background: var(--timeline-bg);
+      border-top: 1px solid #000;
+      display: none;
+      flex-direction: column;
+    }
+
+    .timeline-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 16px;
+      background: var(--bg-dark);
+      border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+      min-height: 36px;
+    }
+
+    .timeline-header-left {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .timeline-header h3 {
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--text-secondary);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+
+    .timeline-count {
+      font-size: 10px;
+      background: var(--accent);
+      color: #fff;
+      padding: 1px 8px;
+      border-radius: 10px;
+      font-weight: 600;
+    }
+
+    .timeline-scroll {
+      max-height: 40vh;
+      overflow-y: auto;
+      scrollbar-width: thin;
+      scrollbar-color: var(--border) transparent;
+    }
+
+    .timeline-scroll::-webkit-scrollbar {
+      width: 6px;
+    }
+
+    .timeline-scroll::-webkit-scrollbar-track {
+      background: transparent;
+    }
+
+    .timeline-scroll::-webkit-scrollbar-thumb {
+      background: var(--border);
+      border-radius: 3px;
+    }
+
+    .preview-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 11px;
+    }
+
+    .preview-table th {
+      text-align: left;
+      padding: 6px 12px;
+      color: var(--text-dim);
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      background: var(--bg-dark);
+      position: sticky;
+      top: 0;
+      z-index: 1;
+    }
+
+    .preview-table td {
+      padding: 5px 12px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+      vertical-align: top;
+    }
+
+    .preview-table tr:hover td {
+      background: rgba(78, 142, 247, 0.06);
+    }
+
+    .preview-table td.idx {
+      color: var(--text-dim);
+      font-weight: 500;
+      font-variant-numeric: tabular-nums;
+      width: 40px;
+    }
+
+    .preview-table td.tc {
+      color: var(--accent);
+      font-family: 'SF Mono', 'Menlo', monospace;
+      font-size: 11px;
+      white-space: nowrap;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .preview-table td.sub-text {
+      color: var(--text);
+      font-family: 'Noto Sans JP', sans-serif;
+      font-size: 12px;
+      max-width: 320px;
+    }
+
+    .preview-table tr:last-child td {
+      border-bottom: none;
+    }
+
+    /* ── Bottom Bar ── */
+    .bottom-bar {
+      background: var(--bg-dark);
+      border-top: 1px solid #000;
+      padding: 12px 20px;
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 12px;
+    }
+
+    .btn-convert {
+      padding: 8px 24px;
+      background: var(--accent);
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      font-family: 'Inter', 'Noto Sans JP', sans-serif;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.15s;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      letter-spacing: 0.01em;
+    }
+
+    .btn-convert:hover:not(:disabled) {
+      background: var(--accent-hover);
+      box-shadow: 0 2px 12px var(--accent-glow);
+    }
+
+    .btn-convert:active:not(:disabled) {
+      transform: scale(0.98);
+    }
+
+    .btn-convert:disabled {
+      background: var(--bg-surface);
+      color: var(--text-dim);
+      cursor: not-allowed;
+      box-shadow: none;
+    }
+
+    .btn-convert .btn-icon {
+      font-size: 14px;
+    }
+
+    .status-msg {
+      font-size: 12px;
+      font-weight: 500;
+      display: none;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 12px;
+      border-radius: 5px;
+    }
+
+    .status-msg.error {
+      display: flex;
+      background: rgba(255, 69, 58, 0.1);
+      color: var(--red);
+      border: 1px solid rgba(255, 69, 58, 0.2);
+    }
+
+    .status-msg.success {
+      display: flex;
+      background: rgba(66, 215, 125, 0.1);
+      color: var(--green);
+      border: 1px solid rgba(66, 215, 125, 0.15);
+    }
+
+    /* ── Responsive ── */
+    @media (max-width: 700px) {
+      .main-layout {
+        flex-direction: column;
+      }
+
+      .inspector {
+        width: 100%;
+        min-width: 0;
+        border-right: none;
+        border-bottom: 1px solid #000;
+      }
+
+      .inspector-section {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+      }
+
+      .inspector-section-title {
+        width: 100%;
+      }
+
+      .field {
+        flex: 1;
+        min-width: 140px;
+        margin-bottom: 0;
+      }
+
+      .viewer {
+        min-height: 220px;
+      }
+    }
+
+    @keyframes pulse {
+
+      0%,
+      100% {
+        opacity: 0.5;
+      }
+
+      50% {
+        opacity: 1;
+      }
+    }
+
+    .converting .btn-icon {
+      animation: pulse 1s ease-in-out infinite;
+    }
+  </style>
+</head>
+
+<body>
+
+  <!-- Toolbar -->
+  <div class="toolbar">
+    <div class="toolbar-left">
+      <div class="toolbar-icon">S</div>
+      <div class="toolbar-title">
+        SRT → FCPXML
+        <span>Subtitle Converter</span>
+      </div>
+    </div>
+    <div class="toolbar-right">
+      <div class="toolbar-badge">FCPXML 1.9</div>
+      <div class="toolbar-badge">FCP 10.4+</div>
+    </div>
+  </div>
+
+  <div class="main-layout">
+
+    <!-- Inspector Sidebar -->
+    <div class="inspector">
+      <div class="inspector-header">
+        <span class="inspector-header-icon">⚙</span>
+        <h2>インスペクタ</h2>
+      </div>
+
+      <div class="inspector-section">
+        <div class="inspector-section-title">
+          <span class="dot"></span>
+          プロジェクト設定
+        </div>
+
+        <div class="field">
+          <label>フレームレート</label>
+          <div class="select-wrap">
+            <select id="fps">
+              <option value="24000/1001">23.976 fps (NDF)</option>
+              <option value="24/1">24 fps</option>
+              <option value="25/1">25 fps (PAL)</option>
+              <option value="30000/1001">29.97 fps (NDF)</option>
+              <option value="30/1" selected>30 fps</option>
+              <option value="60000/1001">59.94 fps (NDF)</option>
+              <option value="60/1">60 fps</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="field">
+          <label>解像度</label>
+          <div class="select-wrap">
+            <select id="resolution">
+              <option value="1920x1080" selected>1920×1080 (FHD)</option>
+              <option value="3840x2160">3840×2160 (4K)</option>
+              <option value="2560x1440">2560×1440 (QHD)</option>
+              <option value="1280x720">1280×720 (HD)</option>
+              <option value="1080x1920">1080×1920 (縦型FHD)</option>
+              <option value="1080x1350">1080×1350 (縦型4:5)</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="field">
+          <label>字幕の縦位置</label>
+          <div class="select-wrap">
+            <select id="verticalPos">
+              <option value="-85">下寄せ（標準）</option>
+              <option value="-70">やや下</option>
+              <option value="0">中央</option>
+              <option value="70">やや上</option>
+              <option value="85">上寄せ</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <div class="inspector-section">
+        <div class="inspector-section-title">
+          <span class="dot" style="background: var(--orange)"></span>
+          読み込み設定
+        </div>
+
+        <div class="field">
+          <label>文字エンコーディング</label>
+          <div class="select-wrap">
+            <select id="encoding">
+              <option value="UTF-8" selected>UTF-8（自動判定）</option>
+              <option value="Shift_JIS">Shift-JIS</option>
+              <option value="EUC-JP">EUC-JP</option>
+              <option value="ISO-2022-JP">ISO-2022-JP (JIS)</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="field">
+          <label
+            style="display:flex; align-items:center; gap:6px; cursor:pointer; text-transform:none; letter-spacing:0;">
+            <input type="checkbox" id="removePunctuation" checked style="width:auto; margin:0;" />
+            <span style="font-size:11px; color:var(--text-secondary);">句読点を自動削除（。、！？）</span>
+          </label>
+        </div>
+
+        <div class="field">
+          <label>フレームオフセット</label>
+          <div class="offset-row">
+            <input type="number" id="frameOffset" value="0" step="1" />
+            <span class="offset-unit">フレーム</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Content Area -->
+    <div class="content-area">
+
+      <!-- Viewer / Drop Zone -->
+      <div class="viewer">
+        <div class="viewer-bg-grid"></div>
+        <div class="drop-zone" id="dropZone">
+          <input type="file" id="fileInput" accept=".srt" multiple />
+          <div class="drop-icon">📄</div>
+          <div class="drop-text">
+            <strong>SRTファイルを読み込む</strong><br>
+            クリックして選択、またはドラッグ＆ドロップ
+          </div>
+          <div class="drop-hint">複数ファイル対応 · .srt 形式</div>
+        </div>
+        <div class="file-list" id="fileList"></div>
+      </div>
+
+      <!-- Timeline Preview -->
+      <div class="timeline-panel" id="timelinePanel">
+        <div class="timeline-header">
+          <div class="timeline-header-left">
+            <h3>タイムライン</h3>
+            <span class="timeline-count" id="countBadge">0</span>
+          </div>
+        </div>
+        <div class="timeline-scroll">
+          <table class="preview-table">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>IN</th>
+                <th>OUT</th>
+                <th>テキスト</th>
+              </tr>
+            </thead>
+            <tbody id="previewBody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Bottom Action Bar -->
+      <div class="bottom-bar">
+        <div class="status-msg" id="status"></div>
+        <button class="btn-convert" id="convertBtn" disabled>
+          <span class="btn-icon">↓</span>
+          FCPXMLを書き出す
+        </button>
+      </div>
+
+    </div>
+  </div>
+
+  <script>
+    // ── State ──────────────────────────────────────────────
+    // Each entry: { fileName, subs: [{start, end, text}] }
+    let loadedFiles = [];
+    let activeFileIndex = 0;
+
+    // ── Fixed lane value ──────────────────────────────────
+    const LANE_VALUE = '1';
+
+    // ── DOM refs ──────────────────────────────────────────
+    const dropZone = document.getElementById('dropZone');
+    const fileInput = document.getElementById('fileInput');
+    const fileListEl = document.getElementById('fileList');
+
+    // ── Drop zone ─────────────────────────────────────────
+    dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
+    dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
+    dropZone.addEventListener('drop', e => {
+      e.preventDefault();
+      dropZone.classList.remove('drag-over');
+      if (e.dataTransfer.files.length > 0) handleFiles(e.dataTransfer.files);
+    });
+    fileInput.addEventListener('change', () => { if (fileInput.files.length > 0) handleFiles(fileInput.files); });
+
+    // Re-read on encoding change
+    document.getElementById('encoding').addEventListener('change', () => {
+      if (loadedFiles.length > 0) reloadAllFiles();
+    });
+
+    // Re-apply offset on preview when offset changes
+    document.getElementById('frameOffset').addEventListener('input', () => {
+      if (loadedFiles.length > 0) updatePreview();
+    });
+
+    function handleFiles(files) {
+      hideStatus();
+      const encoding = document.getElementById('encoding').value;
+      const fileArray = Array.from(files).filter(f => f.name.toLowerCase().endsWith('.srt'));
+
+      if (fileArray.length === 0) {
+        showStatus('error', '.srt ファイルを選択してください');
+        return;
+      }
+
+      let remaining = fileArray.length;
+
+      for (const file of fileArray) {
+        // Skip if already loaded
+        if (loadedFiles.some(f => f.fileName === file.name)) {
+          remaining--;
+          if (remaining === 0) afterFilesLoaded();
+          continue;
+        }
+
+        const reader = new FileReader();
+        reader.onload = e => {
+          const subs = parseSRT(e.target.result);
+          if (subs.length > 0) {
+            loadedFiles.push({ fileName: file.name, rawFile: file, subs });
+          }
+          remaining--;
+          if (remaining === 0) afterFilesLoaded();
+        };
+        reader.readAsText(file, encoding);
+      }
+    }
+
+    function reloadAllFiles() {
+      const encoding = document.getElementById('encoding').value;
+      const filesToReload = loadedFiles.map(f => f.rawFile).filter(Boolean);
+      loadedFiles = [];
+      if (filesToReload.length === 0) return;
+
+      let remaining = filesToReload.length;
+      for (const file of filesToReload) {
+        const reader = new FileReader();
+        reader.onload = e => {
+          const subs = parseSRT(e.target.result);
+          if (subs.length > 0) {
+            loadedFiles.push({ fileName: file.name, rawFile: file, subs });
+          }
+          remaining--;
+          if (remaining === 0) afterFilesLoaded();
+        };
+        reader.readAsText(file, encoding);
+      }
+    }
+
+    function afterFilesLoaded() {
+      if (loadedFiles.length === 0) {
+        showStatus('error', '字幕が見つかりませんでした。');
+        document.getElementById('convertBtn').disabled = true;
+        document.getElementById('timelinePanel').style.display = 'none';
+        fileListEl.style.display = 'none';
+        return;
+      }
+
+      dropZone.classList.add('has-file');
+      activeFileIndex = 0;
+      renderFileList();
+      updatePreview();
+      document.getElementById('convertBtn').disabled = false;
+      hideStatus();
+    }
+
+    function removeFile(index) {
+      loadedFiles.splice(index, 1);
+      if (loadedFiles.length === 0) {
+        dropZone.classList.remove('has-file');
+        fileListEl.style.display = 'none';
+        document.getElementById('timelinePanel').style.display = 'none';
+        document.getElementById('convertBtn').disabled = true;
+        activeFileIndex = 0;
+        return;
+      }
+      if (activeFileIndex >= loadedFiles.length) activeFileIndex = loadedFiles.length - 1;
+      renderFileList();
+      updatePreview();
+    }
+
+    function renderFileList() {
+      fileListEl.style.display = 'flex';
+      fileListEl.innerHTML = loadedFiles.map((f, i) => `
+        <div class="file-item" style="${i === activeFileIndex ? 'border-color: var(--accent); background: rgba(78,142,247,0.1);' : ''}"
+             onclick="activeFileIndex=${i}; renderFileList(); updatePreview();">
+          <span class="file-name-text">✓ ${f.fileName}</span>
+          <span class="file-count">${f.subs.length}件</span>
+          <button class="file-remove" onclick="event.stopPropagation(); removeFile(${i});" title="削除">✕</button>
+        </div>
+      `).join('');
+    }
+
+    // ── SRT Parser ────────────────────────────────────────
+    function tcToMs(tc) {
+      const m = tc.trim().match(/(\d+):(\d+):(\d+)[,.](\d+)/);
+      if (!m) return 0;
+      return (+m[1]) * 3600000 + (+m[2]) * 60000 + (+m[3]) * 1000 + +m[4].padEnd(3, '0').slice(0, 3);
+    }
+
+    function parseSRT(text) {
+      const subs = [];
+      const blocks = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').trim().split(/\n\s*\n/);
+
+      for (const block of blocks) {
+        const lines = block.trim().split('\n');
+        if (lines.length < 2) continue;
+
+        let tcLine = -1;
+        for (let i = 0; i < lines.length; i++) {
+          if (lines[i].includes('-->')) { tcLine = i; break; }
+        }
+        if (tcLine < 0) continue;
+
+        const tcParts = lines[tcLine].split('-->');
+        if (tcParts.length < 2) continue;
+
+        const start = tcToMs(tcParts[0]);
+        const end = tcToMs(tcParts[1]);
+        let textContent = lines.slice(tcLine + 1).map(l => l.trim()).join('\n').trim();
+        if (document.getElementById('removePunctuation').checked) {
+          textContent = textContent.replace(/[。、！？!?，．]/g, '');
+        }
+
+        if (textContent && end > start) {
+          subs.push({ start, end, text: textContent });
+        }
+      }
+
+      return subs;
+    }
+
+    // ── Preview ───────────────────────────────────────────
+    function msToDisplay(ms) {
+      if (ms < 0) ms = 0;
+      const h = Math.floor(ms / 3600000);
+      const m = Math.floor((ms % 3600000) / 60000);
+      const s = Math.floor((ms % 60000) / 1000);
+      const f = ms % 1000;
+      return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')},${String(f).padStart(3, '0')}`;
+    }
+
+    function updatePreview() {
+      if (loadedFiles.length === 0) return;
+      const file = loadedFiles[activeFileIndex];
+      const fpsVal = document.getElementById('fps').value;
+      const { num: fpsNum, den: fpsDen } = getFPSRational(fpsVal);
+      const frameOffset = parseInt(document.getElementById('frameOffset').value || '0');
+      const offsetMs = Math.round(frameOffset * (fpsDen / fpsNum) * 1000);
+
+      const tbody = document.getElementById('previewBody');
+      tbody.innerHTML = file.subs.map((s, i) => `
+        <tr>
+          <td class="idx">${i + 1}</td>
+          <td class="tc">${msToDisplay(s.start + offsetMs)}</td>
+          <td class="tc">${msToDisplay(s.end + offsetMs)}</td>
+          <td class="sub-text">${s.text.replace(/\n/g, ' ').replace(/</g, '&lt;').slice(0, 80)}</td>
+        </tr>
+      `).join('');
+
+      const totalSubs = loadedFiles.reduce((sum, f) => sum + f.subs.length, 0);
+      document.getElementById('countBadge').textContent = loadedFiles.length > 1
+        ? `${file.subs.length} / 全${totalSubs}`
+        : file.subs.length;
+      document.getElementById('timelinePanel').style.display = 'flex';
+    }
+
+    // ── FCPXML Generator ──────────────────────────────────
+    function getFPSRational(fpsVal) {
+      const [n, d] = fpsVal.split('/').map(Number);
+      return { num: n, den: d };
+    }
+
+    function msToFCPTime(ms, fpsNum, fpsDen) {
+      if (ms <= 0) return '0/1s';
+      const msBI = BigInt(Math.round(ms));
+      const numBI = BigInt(fpsNum);
+      const denBI = BigInt(fpsDen);
+      const frames = (msBI * numBI + denBI * 500n) / (denBI * 1000n);
+      const timeNum = frames * denBI;
+      const timeDen = numBI;
+      const g = gcd(timeNum < 0n ? -timeNum : timeNum, timeDen);
+      return `${timeNum / g}/${timeDen / g}s`;
+    }
+
+    function gcd(a, b) {
+      a = a < 0n ? -a : a;
+      b = b < 0n ? -b : b;
+      while (b) { [a, b] = [b, a % b]; }
+      return a;
+    }
+
+    function buildFCPXML(subs, fpsVal, timelineName) {
+      const { num: fpsNum, den: fpsDen } = getFPSRational(fpsVal);
+      const [width, height] = document.getElementById('resolution').value.split('x');
+      const frameDur = `${fpsDen}/${fpsNum}s`;
+      const frameOffset2 = parseInt(document.getElementById('frameOffset').value || '0');
+      const offsetMs = Math.round(frameOffset2 * (fpsDen / fpsNum) * 1000);
+      const verticalPos = document.getElementById('verticalPos').value;
+
+      // Apply offset
+      const adjustedSubs = subs.map(s => ({
+        start: Math.max(0, s.start + offsetMs),
+        end: Math.max(0, s.end + offsetMs),
+        text: s.text
+      })).filter(s => s.end > s.start);
+
+      const totalMs = Math.max(...adjustedSubs.map(s => s.end)) + 2000;
+      const totalTime = msToFCPTime(totalMs, fpsNum, fpsDen);
+      const isDropFrame = (fpsNum === 30000 && fpsDen === 1001) || (fpsNum === 60000 && fpsDen === 1001);
+      const tcFormat = isDropFrame ? 'DF' : 'NDF';
+
+      const fpsLabelMap = {
+        '24000/1001': '2398', '24/1': '24', '25/1': '25',
+        '30000/1001': '2997', '30/1': '30', '60000/1001': '5994', '60/1': '60'
+      };
+      const fpsStr = fpsLabelMap[fpsVal] || String(Math.round(fpsNum / fpsDen));
+      const formatName = `FFVideoFormat${height}p${fpsStr}`;
+
+      const fmtId = 'r1';
+      const effId = 'r2';
+      const BASIC_TITLE_UID = '.../Titles.localized/Bumper:Opener.localized/Basic Title.localized/Basic Title.moti';
+
+      // position param for vertical placement
+      const posParam = verticalPos !== '0'
+        ? `\n                    <param name="Position" key="9999/999166631/999166633/2/100/101" value="0 ${verticalPos}"/>`
+        : '';
+
+      const titleClips = adjustedSubs.map((s, i) => {
+        const offset = msToFCPTime(s.start, fpsNum, fpsDen);
+        const dur = msToFCPTime(s.end - s.start, fpsNum, fpsDen);
+        const tsId = `ts${i}`;
+
+        const plainText = s.text
+          .replace(/<[^>]+>/g, '')
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;');
+
+        return `                <title name="Subtitle ${i + 1}" ref="${effId}" offset="${offset}" duration="${dur}" start="0s" lane="${LANE_VALUE}">${posParam}
+                    <text>
+                        <text-style ref="${tsId}">${plainText}</text-style>
+                    </text>
+                    <text-style-def id="${tsId}">
+                        <text-style font="Helvetica Neue" fontSize="52" fontFace="Bold" fontColor="1 1 1 1" strokeColor="0 0 0 1" strokeWidth="3" baseline="0" alignment="center"/>
+                    </text-style-def>
+                </title>`;
+      }).join('\n');
+
+      return `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE fcpxml>
+<fcpxml version="1.9">
+    <resources>
+        <format id="${fmtId}" name="${formatName}" frameDuration="${frameDur}" width="${width}" height="${height}" colorSpace="1-1-1 (Rec. 709)"/>
+        <effect id="${effId}" name="Basic Title" uid="${BASIC_TITLE_UID}"/>
+    </resources>
+    <library>
+        <event name="${escXML(timelineName)}">
+            <project name="${escXML(timelineName)}">
+                <sequence format="${fmtId}" duration="${totalTime}" tcStart="0s" tcFormat="${tcFormat}" audioLayout="stereo" audioRate="48k">
+                    <spine>
+                        <gap name="Gap" offset="0s" duration="${totalTime}" start="0s">
+${titleClips}
+                        </gap>
+                    </spine>
+                </sequence>
+            </project>
+        </event>
+    </library>
+</fcpxml>`;
+    }
+
+    function escXML(str) {
+      return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+
+    // ── Convert button ─────────────────────────────────────
+    document.getElementById('convertBtn').addEventListener('click', () => {
+      if (loadedFiles.length === 0) return;
+      const fpsVal = document.getElementById('fps').value;
+
+      try {
+        let convertedCount = 0;
+
+        for (const file of loadedFiles) {
+          const timelineName = file.fileName.replace(/\.srt$/i, '');
+          const xml = buildFCPXML(file.subs, fpsVal, timelineName);
+
+          const blob = new Blob([xml], { type: 'application/xml' });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = timelineName + '.fcpxml';
+          a.click();
+          URL.revokeObjectURL(url);
+          convertedCount++;
+        }
+
+        const msg = loadedFiles.length === 1
+          ? `✓ ${loadedFiles[0].subs.length} 件の字幕を変換しました`
+          : `✓ ${convertedCount} ファイルを変換しました`;
+        showStatus('success', msg);
+      } catch (err) {
+        showStatus('error', 'エラー: ' + err.message);
+      }
+    });
+
+    // ── Helpers ────────────────────────────────────────────
+    function showStatus(type, msg) {
+      const el = document.getElementById('status');
+      el.className = 'status-msg ' + type;
+      el.textContent = msg;
+    }
+
+    function hideStatus() {
+      const el = document.getElementById('status');
+      el.className = 'status-msg';
+      el.textContent = '';
+    }
+  </script>
+</body>
+
+</html>
