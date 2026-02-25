@@ -1244,10 +1244,12 @@ ${clips}
                 const data = JSON.parse(raw);
                 if (!data.subs || data.subs.length === 0) return;
                 const time = data.savedAt ? new Date(data.savedAt).toLocaleString('ja-JP') : '';
-                if (confirm(`前回の編集データがあります（${data.subs.length}件 · ${time}）\n復元しますか？`)) {
+                if (confirm(`前回の編集データがあります（${data.subs.length}件 · ${time}）\n復元しますか？\n\n※キャンセルするとデータは削除されます`)) {
                     restoreData(data);
+                } else {
+                    clearAutoSave();
                 }
-            } catch (e) { /* corrupt data */ }
+            } catch (e) { clearAutoSave(); }
         }
 
         function restoreData(data) {
