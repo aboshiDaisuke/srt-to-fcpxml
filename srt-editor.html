@@ -951,26 +951,26 @@
             <input type="text" value="${msToTC(s.start)}"
               onclick="event.stopPropagation()"
               onchange="updateTC(${i},'start',this.value)"
-              onfocus="this.select()" />
+              onfocus="this.select(); selectedIdx = ${i};" />
           </div>
           <div class="col-tc">
             <input type="text" value="${msToTC(s.end)}"
               onclick="event.stopPropagation()"
               onchange="updateTC(${i},'end',this.value)"
-              onfocus="this.select()" />
+              onfocus="this.select(); selectedIdx = ${i};" />
           </div>
           <div class="col-text">
             <input type="text" value="${escAttr(s.text.replace(/\n/g, ' '))}"
               onclick="event.stopPropagation()"
               onchange="updateText(${i},this.value)"
-              onfocus="this.select()" />
+              onfocus="this.select(); selectedIdx = ${i};" />
           </div>
           <div class="col-actions">
-            <button class="act-btn" onclick="event.stopPropagation(); setIn(${i})" title="INを動画位置に">IN⏎</button>
-            <button class="act-btn" onclick="event.stopPropagation(); setOut(${i})" title="OUTを動画位置に">OUT⏎</button>
-            <button class="act-btn" onclick="event.stopPropagation(); splitRow(${i})" title="動画位置で分割">✂</button>
-            <button class="act-btn" onclick="event.stopPropagation(); mergeRow(${i})" title="次の字幕と結合">⊕</button>
-            <button class="act-btn danger" onclick="event.stopPropagation(); deleteRow(${i})" title="削除">✕</button>
+            <button class="act-btn" onclick="event.stopPropagation(); setIn(${i})" title="INを動画位置に (Option + I)">IN⏎</button>
+            <button class="act-btn" onclick="event.stopPropagation(); setOut(${i})" title="OUTを動画位置に (Option + O)">OUT⏎</button>
+            <button class="act-btn" onclick="event.stopPropagation(); splitRow(${i})" title="動画位置で分割 (Option + C)">✂</button>
+            <button class="act-btn" onclick="event.stopPropagation(); mergeRow(${i})" title="次の字幕と結合 (Option + V)">⊕</button>
+            <button class="act-btn danger" onclick="event.stopPropagation(); deleteRow(${i})" title="削除 (Delete)">✕</button>
           </div>
         </div>
       `).join('');
@@ -980,11 +980,25 @@
 
         function selectRow(i) { selectedIdx = i; renderAll(); }
 
-        function updateTC(i, field, val) { subs[i][field] = tcToMs(val); autoSave(); }
-        function updateText(i, val) { subs[i].text = val; autoSave(); }
+        function updateTC(i, field, val) { pushHistory(); subs[i][field] = tcToMs(val); autoSave(); }
+        function updateText(i, val) { pushHistory(); subs[i].text = val; autoSave(); }
+
+        // ═══ HISTORY (UNDO) ═══
+        let historyStack = [];
+        function pushHistory() {
+            historyStack.push(JSON.stringify(subs));
+            if (historyStack.length > 50) historyStack.shift();
+        }
+        function undo() {
+            if (historyStack.length === 0) { toast('info', 'これ以上戻れません'); return; }
+            subs = JSON.parse(historyStack.pop());
+            renderAll();
+            toast('info', '元に戻しました');
+        }
 
         // ═══ OPERATIONS ═══
         function deleteRow(i) {
+            pushHistory();
             subs.splice(i, 1);
             if (selectedIdx >= subs.length) selectedIdx = subs.length - 1;
             renderAll();
@@ -993,6 +1007,7 @@
 
         function mergeRow(i) {
             if (i >= subs.length - 1) { toast('error', '最後の字幕は結合できません'); return; }
+            pushHistory();
             subs[i].end = subs[i + 1].end;
             subs[i].text = subs[i].text + ' ' + subs[i + 1].text;
             subs.splice(i + 1, 1);
@@ -1002,6 +1017,7 @@
 
         function splitRow(i) {
             const s = subs[i];
+            pushHistory();
 
             // テキストのカーソル位置を取得
             const row = document.getElementById(`row-${i}`);
@@ -1039,17 +1055,20 @@
 
         function setIn(i) {
             if (!video.src || isNaN(video.currentTime)) { toast('error', '動画を読み込んでください'); return; }
+            pushHistory();
             subs[i].start = Math.round(video.currentTime * 1000);
             renderAll();
         }
 
         function setOut(i) {
             if (!video.src || isNaN(video.currentTime)) { toast('error', '動画を読み込んでください'); return; }
+            pushHistory();
             subs[i].end = Math.round(video.currentTime * 1000);
             renderAll();
         }
 
         function addSubtitle() {
+            pushHistory();
             const lastEnd = subs.length > 0 ? subs[subs.length - 1].end : 0;
             subs.push({ start: lastEnd, end: lastEnd + 2000, text: '新しい字幕' });
             selectedIdx = subs.length - 1;
@@ -1119,7 +1138,26 @@
 
         // ═══ KEYBOARD ═══
         document.addEventListener('keydown', e => {
+            // Option / Alt + Key shortcuts ( works even while typing in input fields! )
+            if (e.altKey && selectedIdx >= 0) {
+                if (e.code === 'KeyC') { e.preventDefault(); splitRow(selectedIdx); return; }
+                if (e.code === 'KeyV') { e.preventDefault(); mergeRow(selectedIdx); return; }
+                if (e.code === 'KeyI') { e.preventDefault(); setIn(selectedIdx); return; }
+                if (e.code === 'KeyO') { e.preventDefault(); setOut(selectedIdx); return; }
+            }
+
+            // Undo (Cmd+Z / Ctrl+Z)
+            if ((e.metaKey || e.ctrlKey) && e.code === 'KeyZ') {
+                if (e.target.tagName !== 'INPUT' && e.target.tagName !== 'TEXTAREA') {
+                    e.preventDefault();
+                    undo();
+                }
+                return;
+            }
+
+            // Ignore other single-key commands if typing in an input
             if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') return;
+
             if (e.key === ' ') { e.preventDefault(); togglePlay(); }
             if (e.key === 'ArrowLeft') { e.preventDefault(); seekRel(e.shiftKey ? -5 : -1); }
             if (e.key === 'ArrowRight') { e.preventDefault(); seekRel(e.shiftKey ? 5 : 1); }
