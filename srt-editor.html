@@ -134,6 +134,51 @@
             display: flex;
             flex-direction: column;
             overflow: hidden;
+            background: var(--bg-darkest);
+        }
+
+        /* ── Layout Variations ── */
+        .main-content.layout-left,
+        .main-content.layout-right {
+            display: grid;
+            grid-template-rows: 1fr auto;
+            grid-template-columns: 50% 50%;
+        }
+
+        .main-content.layout-left .video-area {
+            grid-column: 1;
+            grid-row: 1;
+            height: 100%;
+            border-right: 1px solid #000;
+        }
+
+        .main-content.layout-left .editor-area {
+            grid-column: 2;
+            grid-row: 1;
+            border-top: none;
+        }
+
+        .main-content.layout-left .waveform-container {
+            grid-column: 1 / 3;
+            grid-row: 2;
+        }
+
+        .main-content.layout-right .video-area {
+            grid-column: 2;
+            grid-row: 1;
+            height: 100%;
+            border-left: 1px solid #000;
+        }
+
+        .main-content.layout-right .editor-area {
+            grid-column: 1;
+            grid-row: 1;
+            border-top: none;
+        }
+
+        .main-content.layout-right .waveform-container {
+            grid-column: 1 / 3;
+            grid-row: 2;
         }
 
         /* ── Video Area ── */
@@ -806,6 +851,7 @@
             <div class="toolbar-title">SRT Editor <span>→ FCPXML</span></div>
         </div>
         <div class="toolbar-right">
+            <button class="tb-btn" onclick="toggleLayout()" title="レイアウト変更">◨ レイアウト</button>
             <button class="tb-btn" onclick="addSubtitle()">＋ 字幕追加</button>
             <button class="tb-btn" id="searchBtn" onclick="toggleSearchPanel()">🔍 検索・置換</button>
             <button class="tb-btn" id="settingsBtn" onclick="toggleSettings()">⚙ 設定</button>
@@ -890,7 +936,7 @@
         </div>
     </div>
 
-    <div class="main-content">
+    <div class="main-content layout-top" id="mainContent">
         <!-- Video -->
         <div class="video-area" id="videoArea">
             <video id="videoPlayer" preload="auto"></video>
@@ -1361,6 +1407,24 @@
         });
 
         // ═══ SETTINGS & SEARCH ═══
+        let currentLayout = 'top';
+
+        function toggleLayout() {
+            const mc = document.getElementById('mainContent');
+            mc.classList.remove(`layout-${currentLayout}`);
+            if (currentLayout === 'top') currentLayout = 'left';
+            else if (currentLayout === 'left') currentLayout = 'right';
+            else currentLayout = 'top';
+            mc.classList.add(`layout-${currentLayout}`);
+            autoSave();
+
+            setTimeout(() => {
+                if (typeof drawWaveform === 'function' && audioBuffer) {
+                    drawWaveform();
+                }
+            }, 50);
+        }
+
         function toggleSettings() { document.getElementById('settingsPanel').classList.toggle('show'); }
         function toggleSearchPanel() {
             const p = document.getElementById('searchPanel');
@@ -1503,7 +1567,8 @@ ${clips}
                         resolution: document.getElementById('resolution').value,
                         verticalPos: document.getElementById('verticalPos').value,
                         encoding: document.getElementById('encoding').value,
-                        timeOffset: document.getElementById('frameOffset').value
+                        timeOffset: document.getElementById('frameOffset').value,
+                        layout: currentLayout
                     },
                     savedAt: new Date().toISOString()
                 };
@@ -1535,6 +1600,12 @@ ${clips}
                 if (data.settings.verticalPos) document.getElementById('verticalPos').value = data.settings.verticalPos;
                 if (data.settings.encoding) document.getElementById('encoding').value = data.settings.encoding;
                 if (data.settings.timeOffset) document.getElementById('frameOffset').value = data.settings.timeOffset;
+                if (data.settings.layout) {
+                    currentLayout = data.settings.layout;
+                    const mc = document.getElementById('mainContent');
+                    mc.classList.remove('layout-top', 'layout-left', 'layout-right');
+                    mc.classList.add(`layout-${currentLayout}`);
+                }
             }
             if (subs.length > 0) {
                 renderAll();
