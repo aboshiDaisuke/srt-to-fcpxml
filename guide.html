@@ -207,6 +207,50 @@
             display: block;
             margin-bottom: 4px;
         }
+
+        /* Features Section */
+        .features-section {
+            background: linear-gradient(145deg, rgba(78, 142, 247, 0.1) 0%, rgba(26, 27, 32, 0) 100%);
+            border: 1px solid var(--accent);
+            border-radius: 16px;
+            padding: 32px;
+            margin-bottom: 48px;
+        }
+
+        .features-section h2 {
+            color: var(--accent);
+            margin-bottom: 24px;
+            font-size: 22px;
+            text-align: center;
+        }
+
+        .feature-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 20px;
+        }
+
+        .feature-item {
+            background: var(--bg-dark);
+            border: 1px solid var(--border-light);
+            border-radius: 12px;
+            padding: 24px;
+        }
+
+        .feature-item h3 {
+            font-size: 16px;
+            color: #fff;
+            margin-bottom: 12px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .feature-item p {
+            color: var(--text-secondary);
+            font-size: 14px;
+            line-height: 1.6;
+        }
     </style>
 </head>
 
@@ -222,8 +266,31 @@
     </div>
 
     <div class="container">
-        <h1>アプリの基本的な使い方</h1>
-        <p class="lead">Final Cut Proに日本語自動字幕を取り込むための最速ワークフロー</p>
+        <h1>SRT Editor → FCPXML 使い方ガイド</h1>
+        <p class="lead">Final Cut Proに日本語自動字幕を取り込むための「最速・最強」ワークフローツール</p>
+
+        <!-- アプリの特徴（ウリ） -->
+        <div class="features-section">
+            <h2>✨ このツールのすごいところ</h2>
+            <div class="feature-grid">
+                <div class="feature-item">
+                    <h3>🚀 圧倒的なスピード</h3>
+                    <p>重たいソフトの起動は不要。ブラウザを開いてファイルをドラッグ＆ドロップするだけで、待ち時間ゼロで即座に編集作業に入れます。</p>
+                </div>
+                <div class="feature-item">
+                    <h3>🔒 完全オフライン処理・超安全</h3>
+                    <p>サーバーへのアップロード通信が一切無いため、数GBある巨大な動画ファイルも一瞬で読み込み完了。情報漏洩の心配も一切ありません。</p>
+                </div>
+                <div class="feature-item">
+                    <h3>🌊 直感的な波形編集UI</h3>
+                    <p>Premiere Proなどの本格編集ソフトのように「音声波形」を描画。人工知能が間違えたタイミングのズレも波形を見ながら直接ドラッグで直感的に調整できます。</p>
+                </div>
+                <div class="feature-item">
+                    <h3>💡 カンタン・完全無料</h3>
+                    <p>月額課金も買い切りも不要。複数行の字幕やFCPXMLへの完璧な出力など、プロ仕様の機能を搭載していながら完全無料でいつでも使えます。</p>
+                </div>
+            </div>
+        </div>
 
         <!-- STEP 1 -->
         <div class="step-card">
@@ -231,11 +298,16 @@
                 <div class="step-number">1</div>
                 <h2>動画とSRTファイルを読み込む</h2>
             </div>
-            <p>VrewやWhisperなどで生成した「SRTファイル」と、プレビュー用の「動画（MP4等）」をブラウザに直接ドラッグ＆ドロップします。</p>
+            <p>Vrew、Whisper、またYouTubeなどで自動生成したベースとなる「SRT字幕ファイル」と、プレビュー用の「動画ファイル（MP4/MOV等）」を用意します。</p>
+            <p><strong>操作方法：</strong>ブラウザに2つのファイルを直接ドラッグ＆ドロップしてください。</p>
+            <ul>
+                <li>動画ファイルだけ、またはSRTファイルだけでも個別に読み込むことができます。</li>
+                <li>動画の解析（音声波形の作成）は、動画の長さによって数秒〜十数秒程度かかります。</li>
+            </ul>
 
             <div class="notice">
                 <strong>💡 ヒント</strong>
-                アップロード通信は一切発生しません。すべての処理はご自身のMac（ブラウザ）の内部で安全に完結します。
+                作業途中にブラウザを閉じてしまっても大丈夫です。自動保存機能があるため、次回開いたときに直前のデータが復元されます。
             </div>
         </div>
 
@@ -243,31 +315,36 @@
         <div class="step-card">
             <div class="step-header">
                 <div class="step-number">2</div>
-                <h2>字幕テキストの調整</h2>
+                <h2>字幕テキストの調整と編集</h2>
             </div>
-            <p>画面にリスト表示された字幕を直接クリックして編集します。</p>
+            <p>ファイルが読み込まれると、画面にリスト表示された字幕を直接ブラウザ上で編集できるようになります。</p>
+            <p><strong>便利な編集機能：</strong></p>
             <ul>
-                <li><strong>改行:</strong> <kbd>Shift</kbd> + <kbd>Enter</kbd>で動画上に反映される自然な改行ができます</li>
-                <li><strong>文字数確認:</strong> 1行20文字を超えると文字数がオレンジ色に警告表示されます</li>
-                <li><strong>検索と置換:</strong> 右上の「🔍 検索・置換」ボタンから、一括で文字の置換が可能です</li>
+                <li><strong>複数行（改行）対応:</strong> <kbd>Shift</kbd> + <kbd>Enter</kbd> を押すことで、動画上で2段・3段と表示される自然な改行ができます。
+                </li>
+                <li><strong>文字数確認と警告:</strong> テキストボックスの右下には文字数が表示され、1行あたり「20文字」を超えると文字数がオレンジ色になって警告してくれます。</li>
+                <li><strong>分割と結合:</strong> 字幕をカーソル位置で2つに分けたい時は <kbd>Option</kbd> + <kbd>C</kbd> を、下の字幕とくっつけたい時は
+                    <kbd>Option</kbd> + <kbd>V</kbd> を押すと一瞬で処理されます。</li>
+                <li><strong>検索と置換:</strong> 右上の「🔍 検索・置換」ボタンから、全体のエラー文字などを一括で置換できます（例：「えーっと」等のケバ取りなど）。</li>
             </ul>
-
         </div>
 
         <!-- STEP 3 -->
         <div class="step-card">
             <div class="step-header">
                 <div class="step-number">3</div>
-                <h2>波形を使ったタイミングの直感調整（IN/OUT）</h2>
+                <h2>波形を使った直感的なタイミング調整</h2>
             </div>
-            <p>人工知能による自動文字起こしで「歌」や「BGM」に引っ張られてタイミングがズレてしまった場合は、画面下部の波形を使って直感的に直せます。</p>
+            <p>AIの自動文字起こしで「歌」や「BGM」に引っ張られてタイミングがズレてしまった場合は、画面下部の波形を使って直感的に直せます。</p>
+            <p><strong>波形操作とショートカット：</strong></p>
             <ul>
-                <li><strong>直感ドラッグ:</strong> 波形に重なっている「緑のブロックの端（左右）」を掴んで動かすだけで、IN点/OUT点がすぐに変更されます</li>
-                <li><strong>波形ズーム:</strong> 右下の <kbd>↔＋</kbd> <kbd>↔ー</kbd> ボタンで時間軸を拡大/縮小できます</li>
-                <li><strong>ショートカット:</strong> 調整したい字幕を選択した状態で、動画を再生しながら <kbd>Option</kbd> + <kbd>I</kbd> でIN点を打つことも可能です
-                </li>
+                <li><strong>直感ドラッグ:</strong>
+                    波形に重なっている「緑のブロック」の左右の端をマウスで掴んでスライドすると、IN点/OUT点がすぐに変更されます。動画プレビュー画面もドラッグに合わせて動き、完璧なタイミングが探せます。</li>
+                <li><strong>波形のズーム:</strong> 細かい音を確認したい時は、右下の <kbd>↔＋</kbd> <kbd>↔ー</kbd>
+                    ボタンで時間軸を拡大/縮小できます。<kbd>↕＋</kbd>で波形の高さを強調することも可能です。</li>
+                <li><strong>ショートカットでタイミングを打つ:</strong> リストで調整したい字幕を選択した状態で、動画を再生しながら最適なタイミングで <kbd>Option</kbd> +
+                    <kbd>I</kbd>（IN点）または <kbd>Option</kbd> + <kbd>O</kbd>（OUT点）を押すとタイムコードが上書きされます。</li>
             </ul>
-
         </div>
 
         <!-- STEP 4 -->
@@ -276,26 +353,38 @@
                 <div class="step-number">4</div>
                 <h2>レイアウトを自分好みに変更</h2>
             </div>
-            <p>外部モニター等をお使いの場合は、右上の「◨ レイアウト」ボタンを押すことで画面構成を変えられます。</p>
-            <p>「標準（上動画・下字幕）」「左動画・右字幕」「右動画・左字幕」の3パターンに対応しており、設定は自動保存されます。</p>
-
+            <p>編集する文章量が多い場合や、外部モニターなどの大きな画面を使っている場合、右上の「◨ レイアウト」ボタンを押すことで、画面全体を見やすく構成変更できます。</p>
+            <p><strong>対応しているレイアウト：</strong></p>
+            <ul>
+                <li><strong>上: 動画 ／ 下: 字幕</strong>（標準・ラップトップ向け）</li>
+                <li><strong>左: 動画 ／ 右: 字幕</strong>（ワイドモニター向け）</li>
+                <li><strong>右: 動画 ／ 左: 字幕</strong>（ワイドモニター向け）</li>
+            </ul>
+            <p>設定したレイアウトは保存されるため、毎回設定し直す必要はありません。</p>
         </div>
 
         <!-- STEP 5 -->
         <div class="step-card">
             <div class="step-header">
                 <div class="step-number">5</div>
-                <h2>FCPXMLとして書き出し・読み込み</h2>
+                <h2>FCPXMLとして書き出し・完全連携</h2>
             </div>
-            <p>編集が完了したら、右上の「↓ FCPXML書き出し」ボタンをクリックします。設定パネルから「フレームレート（29.97fpsなど）」や「解像度」を動画に合わせて選択しておいてください。</p>
-
-            <p><strong>Final Cut Proでの読み込み方法：</strong></p>
+            <p>編集がすべて完了したら、いよいよFinal Cut Pro用のデータとして書き出します。右上の「↓ FCPXML書き出し」ボタンをクリックしてください。</p>
+            <p><strong>書き出し設定のポイント：</strong></p>
             <ul>
-                <li>Final Cut Proを開く</li>
-                <li>ファイル ＞ 読み込む ＞ XML... を選択</li>
-                <li>ダウンロードされた <code>xxx.fcpxml</code> ファイルを選ぶだけ！</li>
+                <li><strong>フレームレート:</strong> 必ずFinal Cut
+                    Proで作成しているプロジェクト設定（通常は29.97fpsや60fps）と同じものを選択してください。これがズレるとFCP上でタイミングが狂います。</li>
+                <li><strong>解像度:</strong> フルHD、4K、またはモバイル向けの縦型動画（9:16）などを選べます。</li>
+                <li><strong>縦位置の調整:</strong> デフォルトでは「下から10%」の位置に字幕が出ます。動画のテロップ位置などに合わせて必要であれば数値を変更してください。</li>
             </ul>
 
+            <p><strong>Final Cut Proでの読み込み手順：</strong></p>
+            <ol style="margin-left: 24px; padding-left: 12px; margin-top: 10px; color: var(--text-secondary);">
+                <li style="margin-bottom: 6px;">Final Cut Proを起動し、該当のイベントを選択した状態にします。</li>
+                <li style="margin-bottom: 6px;">メニューバーから <strong>ファイル ＞ 読み込む ＞ XML...</strong> を選択します。</li>
+                <li style="margin-bottom: 6px;">ダウンロードされたファイル（<code>xxx.fcpxml</code>）を選びます。</li>
+                <li style="margin-bottom: 6px;">新しいプロジェクトとして完璧なタイミングの「基本タイトル」字幕がズラッと並んだタイムラインが生成されます！</li>
+            </ol>
         </div>
 
     </div>
