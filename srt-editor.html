@@ -453,7 +453,7 @@
             min-width: 0;
         }
 
-        .sub-row .col-text input {
+        .sub-row .col-text textarea {
             width: 100%;
             background: transparent;
             border: 1px solid transparent;
@@ -463,12 +463,35 @@
             font-family: 'Noto Sans JP', sans-serif;
             font-size: 12px;
             outline: none;
+            resize: none;
+            overflow: hidden;
+            line-height: 1.4;
+            min-height: 24px;
         }
 
-        .sub-row .col-text input:focus {
+        .sub-row .col-text textarea:focus {
             background: var(--bg-mid);
             border-color: var(--accent);
             box-shadow: 0 0 0 2px var(--accent-glow);
+        }
+
+        .sub-row .col-text textarea.text-warning {
+            color: var(--orange);
+        }
+
+        .char-count {
+            font-size: 10px;
+            color: var(--text-dim);
+            margin-left: 8px;
+            margin-right: 4px;
+            width: 20px;
+            text-align: right;
+            flex-shrink: 0;
+        }
+
+        .char-count.warning {
+            color: var(--orange);
+            font-weight: 700;
         }
 
         .sub-row .col-actions {
@@ -638,6 +661,48 @@
             color: var(--text-dim);
         }
 
+        /* ── Search Panel ── */
+        .search-panel {
+            position: absolute;
+            top: 44px;
+            right: 80px;
+            background: var(--bg-elevated);
+            border: 1px solid var(--border-light);
+            border-radius: 8px;
+            padding: 12px;
+            width: 260px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+            display: none;
+            z-index: 200;
+        }
+
+        .search-panel.show {
+            display: block;
+        }
+
+        .search-panel input {
+            width: 100%;
+            margin-bottom: 8px;
+            background: var(--bg-mid);
+            border: 1px solid var(--border);
+            color: var(--text);
+            padding: 5px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+            outline: none;
+            font-family: inherit;
+        }
+
+        .search-panel input:focus {
+            border-color: var(--accent);
+        }
+
+        .search-panel .buttons {
+            display: flex;
+            gap: 4px;
+            justify-content: flex-end;
+        }
+
         /* ── Toast ── */
         .toast {
             position: fixed;
@@ -679,12 +744,20 @@
         </div>
         <div class="toolbar-right">
             <button class="tb-btn" onclick="addSubtitle()">＋ 字幕追加</button>
-            <button class="tb-btn" onclick="saveProject()" title="プロジェクトをJSONで保存">💾 保存</button>
-            <button class="tb-btn" onclick="document.getElementById('projectInput').click()" title="プロジェクトを読み込み">📂
-                開く</button>
+            <button class="tb-btn" id="searchBtn" onclick="toggleSearchPanel()">🔍 検索・置換</button>
             <button class="tb-btn" id="settingsBtn" onclick="toggleSettings()">⚙ 設定</button>
+            <button class="tb-btn" onclick="exportSRT()" title="SRTファイルとして保存">💾 SRT保存</button>
             <button class="tb-btn primary" id="exportBtn" onclick="exportFCPXML()" disabled>↓ FCPXML書き出し</button>
-            <input type="file" id="projectInput" accept=".json" style="display:none" />
+        </div>
+    </div>
+
+    <!-- Search Panel -->
+    <div class="search-panel" id="searchPanel">
+        <input type="text" id="searchInput" placeholder="検索するテキスト..." onkeydown="if(event.key==='Enter') findNext()" />
+        <input type="text" id="replaceInput" placeholder="置換後のテキスト..." />
+        <div class="buttons">
+            <button class="tb-btn" onclick="findNext()">次を検索</button>
+            <button class="tb-btn primary" onclick="replaceAll()">すべて置換</button>
         </div>
     </div>
 
@@ -803,8 +876,13 @@
                     <h3>字幕エディタ</h3>
                     <span class="sub-count" id="subCount">0</span>
                 </div>
-                <div style="font-size:10px; color:var(--text-dim);">
-                    クリックで選択 · 各フィールドをクリックして直接編集
+                <div style="font-size:10px; color:var(--text-dim); display:flex; align-items:center; gap:12px;">
+                    <label style="display:flex; align-items:center; gap:4px; cursor:pointer;">
+                        <input type="checkbox" id="autoScrollToggle" checked onchange="autoScrollEnabled = this.checked"
+                            style="margin:0;">
+                        <span>オートスクロール</span>
+                    </label>
+                    <span>クリックで選択 · 各フィールドをクリックして直接編集</span>
                 </div>
             </div>
             <div class="sub-header">
@@ -829,6 +907,8 @@
         let selectedIdx = -1;
         let playingIdx = -1;
         let srtFileName = '';
+        let autoScrollEnabled = true;
+        let searchIdx = -1;
         const STORAGE_KEY = 'srt-editor-autosave';
         const video = document.getElementById('videoPlayer');
 
@@ -960,10 +1040,13 @@
               onfocus="this.select(); selectedIdx = ${i};" />
           </div>
           <div class="col-text">
-            <input type="text" value="${escAttr(s.text.replace(/\n/g, ' '))}"
+            <textarea class="${s.text.length > 20 ? 'text-warning' : ''}" rows="${Math.max(1, s.text.split('\n').length)}"
               onclick="event.stopPropagation()"
+              onkeydown="if(event.key==='Enter' && !event.shiftKey) { event.preventDefault(); this.blur(); }"
+              oninput="handleInput(this); this.rows = this.value.split('\\n').length;"
               onchange="updateText(${i},this.value)"
-              onfocus="this.select(); selectedIdx = ${i};" />
+              onfocus="selectedIdx = ${i};">${escAttr(s.text)}</textarea>
+            <div class="char-count ${s.text.length > 20 ? 'warning' : ''}" title="20文字以上は注意">${s.text.length}</div>
           </div>
           <div class="col-actions">
             <button class="act-btn" onclick="event.stopPropagation(); setIn(${i})" title="INを動画位置に (Option + I)">IN⏎</button>
@@ -982,6 +1065,21 @@
 
         function updateTC(i, field, val) { pushHistory(); subs[i][field] = tcToMs(val); autoSave(); }
         function updateText(i, val) { pushHistory(); subs[i].text = val; autoSave(); }
+
+        function handleInput(el) {
+            const len = el.value.length;
+            const countEl = el.nextElementSibling;
+            if (countEl && countEl.classList.contains('char-count')) {
+                countEl.textContent = len;
+                if (len > 20) {
+                    el.classList.add('text-warning');
+                    countEl.classList.add('warning');
+                } else {
+                    el.classList.remove('text-warning');
+                    countEl.classList.remove('warning');
+                }
+            }
+        }
 
         // ═══ HISTORY (UNDO) ═══
         let historyStack = [];
@@ -1021,7 +1119,7 @@
 
             // テキストのカーソル位置を取得
             const row = document.getElementById(`row-${i}`);
-            const textInput = row ? row.querySelector('.col-text input') : null;
+            const textInput = row ? row.querySelector('.col-text textarea') : null;
             const cursorPos = textInput ? textInput.selectionStart : -1;
             const fullText = s.text.replace(/\n/g, ' ');
 
@@ -1116,7 +1214,7 @@
                         row.classList.add('playing');
                         const container = document.getElementById('editorScroll');
                         const rr = row.getBoundingClientRect(), cr = container.getBoundingClientRect();
-                        if (rr.bottom > cr.bottom || rr.top < cr.top) row.scrollIntoView({ block: 'center', behavior: 'smooth' });
+                        if (autoScrollEnabled && (rr.bottom > cr.bottom || rr.top < cr.top)) row.scrollIntoView({ block: 'center', behavior: 'smooth' });
                     }
                 }
             }
@@ -1167,12 +1265,55 @@
             if (e.key === 'Enter' && selectedIdx >= 0) { e.preventDefault(); seekTo(selectedIdx); }
         });
 
-        // ═══ SETTINGS ═══
+        // ═══ SETTINGS & SEARCH ═══
         function toggleSettings() { document.getElementById('settingsPanel').classList.toggle('show'); }
+        function toggleSearchPanel() {
+            const p = document.getElementById('searchPanel');
+            p.classList.toggle('show');
+            if (p.classList.contains('show')) document.getElementById('searchInput').focus();
+        }
+
         document.addEventListener('click', e => {
             const p = document.getElementById('settingsPanel'), b = document.getElementById('settingsBtn');
             if (!p.contains(e.target) && !b.contains(e.target)) p.classList.remove('show');
+
+            const sp = document.getElementById('searchPanel'), sb = document.getElementById('searchBtn');
+            if (sp && sb && !sp.contains(e.target) && !sb.contains(e.target)) sp.classList.remove('show');
         });
+
+        function findNext() {
+            const q = document.getElementById('searchInput').value.toLowerCase();
+            if (!q || subs.length === 0) return;
+            let startIdx = (searchIdx + 1) % subs.length;
+            let found = -1;
+            for (let i = 0; i < subs.length; i++) {
+                let idx = (startIdx + i) % subs.length;
+                if (subs[idx].text.toLowerCase().includes(q)) { found = idx; break; }
+            }
+            if (found >= 0) {
+                searchIdx = found;
+                selectRow(found);
+                scrollToRow(found);
+            } else { toast('info', '見つかりませんでした'); }
+        }
+
+        function replaceAll() {
+            const q = document.getElementById('searchInput').value;
+            const rep = document.getElementById('replaceInput').value;
+            if (!q) return;
+            let count = 0;
+            pushHistory();
+            for (let i = 0; i < subs.length; i++) {
+                if (subs[i].text.includes(q)) {
+                    subs[i].text = subs[i].text.split(q).join(rep);
+                    count++;
+                }
+            }
+            if (count > 0) {
+                renderAll();
+                toast('success', `${count}箇所のテキストを置換しました`);
+            } else { toast('info', '見つかりませんでした'); }
+        }
 
         // ═══ FCPXML EXPORT ═══
         function gcd(a, b) {
@@ -1310,48 +1451,26 @@ ${clips}
             try { localStorage.removeItem(STORAGE_KEY); } catch (e) { }
         }
 
-        // ═══ PROJECT SAVE/LOAD (JSON file) ═══
-        function saveProject() {
+        // ═══ SRT EXPORT ═══
+        function exportSRT() {
             if (subs.length === 0) { toast('error', '保存する字幕がありません'); return; }
-            const data = {
-                version: 1,
-                subs,
-                srtFileName,
-                settings: {
-                    fps: document.getElementById('fps').value,
-                    resolution: document.getElementById('resolution').value,
-                    verticalPos: document.getElementById('verticalPos').value,
-                    encoding: document.getElementById('encoding').value,
-                    timeOffset: document.getElementById('frameOffset').value
-                },
-                savedAt: new Date().toISOString()
-            };
-            const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+            let srtContent = '';
+            for (let i = 0; i < subs.length; i++) {
+                const s = subs[i];
+                srtContent += `${i + 1}\n`;
+                srtContent += `${msToTC(s.start)} --> ${msToTC(s.end)}\n`;
+                srtContent += `${s.text}\n\n`;
+            }
+            // Ensure CRLF for SRT standard
+            srtContent = srtContent.replace(/\r\n/g, '\n').replace(/\n/g, '\r\n');
+            const blob = new Blob([srtContent], { type: 'text/plain;charset=utf-8' });
             const a = document.createElement('a');
             a.href = URL.createObjectURL(blob);
-            a.download = (srtFileName || 'project') + '.srt-editor.json';
+            a.download = (srtFileName || 'subtitle') + '.srt';
             a.click();
             URL.revokeObjectURL(a.href);
-            toast('success', '💾 プロジェクトを保存しました');
+            toast('success', '💾 SRTとして保存しました');
         }
-
-        document.getElementById('projectInput').addEventListener('change', e => {
-            const file = e.target.files[0];
-            if (!file) return;
-            const reader = new FileReader();
-            reader.onload = ev => {
-                try {
-                    const data = JSON.parse(ev.target.result);
-                    if (!data.subs || !Array.isArray(data.subs)) throw new Error('invalid');
-                    restoreData(data);
-                    toast('success', `📂 ${data.subs.length} 件の字幕を復元しました`);
-                } catch (err) {
-                    toast('error', 'プロジェクトファイルの読み込みに失敗しました');
-                }
-            };
-            reader.readAsText(file);
-            e.target.value = '';
-        });
 
         // Hook auto-save into operations that modify subs
         const _origRenderAll = renderAll;
