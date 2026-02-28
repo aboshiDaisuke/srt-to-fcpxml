@@ -1490,7 +1490,7 @@
             return `${tN / g}/${tD / g}s`;
         }
 
-        function exportFCPXML() {
+        async function exportFCPXML() {
             if (subs.length === 0) return;
             const fpsVal = document.getElementById('fps').value;
             const [fpsNum, fpsDen] = fpsVal.split('/').map(Number);
@@ -1539,12 +1539,8 @@ ${clips}
     </library>
 </fcpxml>`;
             const blob = new Blob([xml], { type: 'application/xml' });
-            const a = document.createElement('a');
-            a.href = URL.createObjectURL(blob);
-            a.download = name + '.fcpxml';
-            a.click();
-            URL.revokeObjectURL(a.href);
-            toast('success', `✓ ${adj.length} 件をFCPXMLに書き出しました`);
+            const saved = await saveFile(blob, name + '.fcpxml', 'FCPXML File', { 'application/xml': ['.fcpxml'] });
+            if (saved) toast('success', `✓ ${adj.length} 件をFCPXMLに書き出しました`);
         }
 
         // ═══ TOAST ═══
@@ -1618,8 +1614,33 @@ ${clips}
             try { localStorage.removeItem(STORAGE_KEY); } catch (e) { }
         }
 
+        // ═══ EXPORT UTILS ═══
+        async function saveFile(blob, defaultName, dialogTitle, accept) {
+            try {
+                if ('showSaveFilePicker' in window) {
+                    const handle = await window.showSaveFilePicker({
+                        suggestedName: defaultName,
+                        types: [{ description: dialogTitle, accept: accept }]
+                    });
+                    const writable = await handle.createWritable();
+                    await writable.write(blob);
+                    await writable.close();
+                    return true;
+                }
+            } catch (err) {
+                if (err.name === 'AbortError') return false; // User cancelled
+            }
+            // Fallback for older browsers
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = defaultName;
+            a.click();
+            URL.revokeObjectURL(a.href);
+            return true;
+        }
+
         // ═══ SRT EXPORT ═══
-        function exportSRT() {
+        async function exportSRT() {
             if (subs.length === 0) { toast('error', '保存する字幕がありません'); return; }
             let srtContent = '';
             for (let i = 0; i < subs.length; i++) {
@@ -1631,15 +1652,12 @@ ${clips}
             // Ensure CRLF for SRT standard
             srtContent = srtContent.replace(/\r\n/g, '\n').replace(/\n/g, '\r\n');
             const blob = new Blob([srtContent], { type: 'text/plain;charset=utf-8' });
-            const a = document.createElement('a');
-            a.href = URL.createObjectURL(blob);
-            a.download = (srtFileName || 'subtitle') + '.srt';
-            a.click();
-            URL.revokeObjectURL(a.href);
-            toast('success', '💾 SRTとして保存しました');
+            const name = (srtFileName || 'subtitle') + '.srt';
+            const saved = await saveFile(blob, name, 'SRT File', { 'text/plain': ['.srt'] });
+            if (saved) toast('success', '💾 SRTとして保存しました');
         }
 
-        function exportVTT() {
+        async function exportVTT() {
             if (subs.length === 0) { toast('error', '保存する字幕がありません'); return; }
             let vttContent = 'WEBVTT\n\n';
 
@@ -1660,12 +1678,9 @@ ${clips}
             }
 
             const blob = new Blob([vttContent], { type: 'text/vtt;charset=utf-8' });
-            const a = document.createElement('a');
-            a.href = URL.createObjectURL(blob);
-            a.download = (srtFileName || 'subtitle') + '.vtt';
-            a.click();
-            URL.revokeObjectURL(a.href);
-            toast('success', '💾 VTTとして保存しました');
+            const name = (srtFileName || 'subtitle') + '.vtt';
+            const saved = await saveFile(blob, name, 'VTT File', { 'text/vtt': ['.vtt'] });
+            if (saved) toast('success', '💾 VTTとして保存しました');
         }
 
         // Hook auto-save into operations that modify subs
