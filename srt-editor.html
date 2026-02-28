@@ -317,6 +317,69 @@
             line-height: 1.4;
         }
 
+        /* ── Waveform ── */
+        .waveform-container {
+            height: 100px;
+            background: var(--bg-darkest);
+            border-bottom: 1px solid #000;
+            position: relative;
+            flex-shrink: 0;
+            display: none;
+            /* hidden by default */
+        }
+
+        .waveform-scroll {
+            position: absolute;
+            inset: 0;
+            overflow-x: auto;
+            overflow-y: hidden;
+            scrollbar-width: none;
+            display: flex;
+            align-items: center;
+        }
+
+        .waveform-scroll::-webkit-scrollbar {
+            display: none;
+        }
+
+        .wave-spacer {
+            flex-shrink: 0;
+        }
+
+        .waveform-scroll canvas {
+            display: block;
+            height: 100%;
+            cursor: pointer;
+        }
+
+        .waveform-playhead {
+            position: absolute;
+            top: 0;
+            bottom: 0;
+            width: 2px;
+            background: var(--red);
+            pointer-events: none;
+            z-index: 10;
+            left: 50%;
+            transform: translateX(-50%);
+        }
+
+        .waveform-controls {
+            position: absolute;
+            bottom: 4px;
+            right: 4px;
+            display: flex;
+            gap: 4px;
+            z-index: 20;
+        }
+
+        .waveform-controls .tb-btn {
+            background: rgba(34, 34, 34, 0.8);
+            border-color: rgba(68, 68, 68, 0.8);
+            backdrop-filter: blur(4px);
+            padding: 2px 6px;
+        }
+
         /* ── Editor ── */
         .editor-area {
             flex: 1;
@@ -746,7 +809,8 @@
             <button class="tb-btn" onclick="addSubtitle()">＋ 字幕追加</button>
             <button class="tb-btn" id="searchBtn" onclick="toggleSearchPanel()">🔍 検索・置換</button>
             <button class="tb-btn" id="settingsBtn" onclick="toggleSettings()">⚙ 設定</button>
-            <button class="tb-btn" onclick="exportSRT()" title="SRTファイルとして保存">💾 SRT保存</button>
+            <button class="tb-btn" onclick="exportSRT()" title="SRTファイルとして保存">💾 SRT</button>
+            <button class="tb-btn" onclick="exportVTT()" title="VTTファイルとして保存">💾 VTT</button>
             <button class="tb-btn primary" id="exportBtn" onclick="exportFCPXML()" disabled>↓ FCPXML書き出し</button>
         </div>
     </div>
@@ -869,6 +933,22 @@
             </div>
         </div>
 
+        <!-- Waveform -->
+        <div class="waveform-container" id="waveformContainer">
+            <div class="waveform-playhead" id="waveformPlayhead"></div>
+            <div class="waveform-scroll" id="waveformScroll">
+                <div class="wave-spacer" id="waveSpacerLeft"></div>
+                <canvas id="waveformCanvas"></canvas>
+                <div class="wave-spacer" id="waveSpacerRight"></div>
+            </div>
+            <div class="waveform-controls">
+                <button class="tb-btn small" onclick="zoomWave(1.2)" title="横に拡大">↔＋</button>
+                <button class="tb-btn small" onclick="zoomWave(0.8)" title="横に縮小">↔ー</button>
+                <button class="tb-btn small" onclick="scaleWave(1.2)" title="縦に拡大">↕＋</button>
+                <button class="tb-btn small" onclick="scaleWave(0.8)" title="縦に縮小">↕ー</button>
+            </div>
+        </div>
+
         <!-- Editor -->
         <div class="editor-area">
             <div class="editor-toolbar">
@@ -947,6 +1027,7 @@
             document.getElementById('dropVideo').classList.add('loaded');
             document.getElementById('videoControls').style.display = 'flex';
             checkOverlay();
+            extractAudio(file);
         }
 
         function loadSrt(file) {
@@ -1182,11 +1263,25 @@
 
         // ═══ VIDEO CONTROLS ═══
         function togglePlay() { if (video.paused) video.play(); else video.pause(); }
-        function seekRel(sec) { video.currentTime = Math.max(0, Math.min(video.duration || 0, video.currentTime + sec)); }
-        function seekTo(i) { if (video.src) video.currentTime = subs[i].start / 1000; }
+        function seekRel(sec) {
+            video.currentTime = Math.max(0, Math.min(video.duration || 0, video.currentTime + sec));
+            if (video.paused && typeof updateWaveformPlayhead === 'function') updateWaveformPlayhead();
+        }
+        function seekTo(i) {
+            if (video.src) {
+                video.currentTime = subs[i].start / 1000;
+                if (video.paused && typeof updateWaveformPlayhead === 'function') updateWaveformPlayhead();
+            }
+        }
 
-        video.addEventListener('play', () => document.getElementById('playBtn').textContent = '❚❚');
-        video.addEventListener('pause', () => document.getElementById('playBtn').textContent = '▶');
+        video.addEventListener('play', () => {
+            document.getElementById('playBtn').textContent = '❚❚';
+            if (typeof startWaveformAnimation === 'function') startWaveformAnimation();
+        });
+        video.addEventListener('pause', () => {
+            document.getElementById('playBtn').textContent = '▶';
+            if (typeof stopWaveformAnimation === 'function') stopWaveformAnimation();
+        });
 
         video.addEventListener('timeupdate', () => {
             const cur = video.currentTime, dur = video.duration || 1;
@@ -1472,9 +1567,294 @@ ${clips}
             toast('success', '💾 SRTとして保存しました');
         }
 
+        function exportVTT() {
+            if (subs.length === 0) { toast('error', '保存する字幕がありません'); return; }
+            let vttContent = 'WEBVTT\n\n';
+
+            const msToVttTc = (ms) => {
+                if (ms < 0) ms = 0;
+                const h = Math.floor(ms / 3600000);
+                const m = Math.floor((ms % 3600000) / 60000);
+                const s = Math.floor((ms % 60000) / 1000);
+                const f = ms % 1000;
+                return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}.${String(f).padStart(3, '0')}`;
+            };
+
+            for (let i = 0; i < subs.length; i++) {
+                const s = subs[i];
+                vttContent += `${i + 1}\n`;
+                vttContent += `${msToVttTc(s.start)} --> ${msToVttTc(s.end)}\n`;
+                vttContent += `${s.text}\n\n`;
+            }
+
+            const blob = new Blob([vttContent], { type: 'text/vtt;charset=utf-8' });
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = (srtFileName || 'subtitle') + '.vtt';
+            a.click();
+            URL.revokeObjectURL(a.href);
+            toast('success', '💾 VTTとして保存しました');
+        }
+
         // Hook auto-save into operations that modify subs
         const _origRenderAll = renderAll;
-        renderAll = function () { _origRenderAll(); autoSave(); };
+        renderAll = function () { _origRenderAll(); autoSave(); if (typeof drawWaveform === 'function') drawWaveform(); };
+
+        // ═══ WAVEFORM ═══
+        let audioCtx;
+        let audioBuffer;
+        let zoomLevel = 50;
+        let waveScale = 1;
+        let waveData = [];
+
+        function extractAudio(file) {
+            document.getElementById('waveformContainer').style.display = 'block';
+            const canvas = document.getElementById('waveformCanvas');
+            const scrollArea = document.getElementById('waveformScroll');
+            const ctx = canvas.getContext('2d');
+            canvas.width = scrollArea.clientWidth;
+            canvas.height = scrollArea.clientHeight || 100;
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.fillStyle = '#98989f';
+            ctx.font = '11px sans-serif';
+            ctx.fillText('音声データを読み込み・生成中...', 10, 20);
+
+            const reader = new FileReader();
+            reader.onload = async (e) => {
+                try {
+                    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                    const arrayBuffer = e.target.result;
+                    audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+                    processWaveformData();
+                } catch (err) {
+                    console.error('Audio decode error', err);
+                    ctx.clearRect(0, 0, canvas.width, canvas.height);
+                    ctx.fillStyle = '#ff453a';
+                    ctx.fillText('音声の解析に失敗しました（動画が長い・非対応フォーマットなどの理由）', 10, 20);
+                }
+            };
+            reader.readAsArrayBuffer(file);
+        }
+
+        function processWaveformData() {
+            if (!audioBuffer) return;
+            const channelData = audioBuffer.getChannelData(0);
+            const chunkDur = 0.05;
+            const chunkSize = Math.floor(audioBuffer.sampleRate * chunkDur);
+            waveData = [];
+            for (let i = 0; i < channelData.length; i += chunkSize) {
+                let max = 0;
+                for (let j = 0; j < chunkSize && i + j < channelData.length; j++) {
+                    let val = Math.abs(channelData[i + j]);
+                    if (val > max) max = val;
+                }
+                waveData.push(max);
+            }
+            drawWaveform();
+        }
+
+        function drawWaveform() {
+            if (!waveData.length) return;
+            const canvas = document.getElementById('waveformCanvas');
+            const scrollArea = document.getElementById('waveformScroll');
+
+            const totalSecs = audioBuffer.duration;
+            const canvasWidth = totalSecs * zoomLevel;
+            canvas.width = canvasWidth;
+            canvas.height = scrollArea.clientHeight || 100;
+
+            const ctx = canvas.getContext('2d');
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            const halfW = scrollArea.clientWidth / 2;
+            document.getElementById('waveSpacerLeft').style.flex = `0 0 ${halfW}px`;
+            document.getElementById('waveSpacerRight').style.flex = `0 0 ${halfW}px`;
+
+            // Draw Subtitle Background Blocks
+            ctx.fillStyle = 'rgba(66, 215, 125, 0.15)';
+            ctx.strokeStyle = 'rgba(66, 215, 125, 0.5)';
+            ctx.lineWidth = 1;
+            for (const s of subs) {
+                const startX = (s.start / 1000) * zoomLevel;
+                const endX = (s.end / 1000) * zoomLevel;
+                const w = Math.max(1, endX - startX);
+                ctx.fillRect(startX, 0, w, canvas.height);
+                ctx.strokeRect(startX, 0, w, canvas.height);
+            }
+
+            ctx.fillStyle = 'rgba(78, 142, 247, 0.8)';
+            const chunkDur = 0.05;
+            const pixelsPerChunk = zoomLevel * chunkDur;
+            const midY = canvas.height / 2;
+
+            ctx.beginPath();
+            ctx.moveTo(0, midY);
+            for (let i = 0; i < waveData.length; i++) {
+                const x = i * pixelsPerChunk;
+                const h = waveData[i] * midY * waveScale;
+                ctx.lineTo(x, midY - h);
+            }
+            for (let i = waveData.length - 1; i >= 0; i--) {
+                const x = i * pixelsPerChunk;
+                const h = waveData[i] * midY * waveScale;
+                ctx.lineTo(x, midY + h);
+            }
+            ctx.closePath();
+            ctx.fill();
+
+            updateWaveformPlayhead();
+            if (!video.paused) {
+                startWaveformAnimation();
+            }
+        }
+
+        function zoomWave(ratio) {
+            zoomLevel *= ratio;
+            if (zoomLevel < 5) zoomLevel = 5;
+            if (zoomLevel > 1000) zoomLevel = 1000;
+            drawWaveform();
+        }
+
+        function scaleWave(ratio) {
+            waveScale *= ratio;
+            if (waveScale < 0.1) waveScale = 0.1;
+            if (waveScale > 10) waveScale = 10;
+            drawWaveform();
+        }
+
+        let waveformAnimationId = null;
+
+        function updateWaveformPlayhead() {
+            if (!audioBuffer) return;
+            const cur = video.currentTime;
+            const x = cur * zoomLevel;
+
+            const scrollArea = document.getElementById('waveformScroll');
+            if (scrollArea && !window.isDraggingWaveform && autoScrollEnabled) {
+                scrollArea.scrollLeft = x;
+            }
+        }
+
+        function startWaveformAnimation() {
+            if (!audioBuffer) return;
+            if (waveformAnimationId === null) {
+                function rafLoop() {
+                    updateWaveformPlayhead();
+                    waveformAnimationId = requestAnimationFrame(rafLoop);
+                }
+                rafLoop();
+            }
+        }
+
+        function stopWaveformAnimation() {
+            if (waveformAnimationId !== null) {
+                cancelAnimationFrame(waveformAnimationId);
+                waveformAnimationId = null;
+            }
+        }
+        document.getElementById('waveformScroll')?.addEventListener('mousedown', () => { window.isDraggingWaveform = true; });
+        window.addEventListener('mouseup', () => { window.isDraggingWaveform = false; });
+
+        // ── Drag and Drop Logic ──
+        let dragInfo = null;
+        let pMouseMove = null;
+
+        document.getElementById('waveformCanvas')?.addEventListener('mousemove', e => {
+            if (!audioBuffer) return;
+            const canvas = document.getElementById('waveformCanvas');
+            const rect = canvas.getBoundingClientRect();
+            const x = e.clientX - rect.left;
+            const hoverMs = (x / zoomLevel) * 1000;
+            const hoverToleranceMs = (10 / zoomLevel) * 1000; // 10 pixels tolerance
+
+            if (dragInfo) {
+                // Currently dragging
+                e.preventDefault();
+                let newMs = Math.round(hoverMs);
+                if (newMs < 0) newMs = 0;
+
+                const s = subs[dragInfo.idx];
+                if (dragInfo.type === 'in') {
+                    if (newMs >= s.end) newMs = s.end - 1; // Prevent crossing OUT
+                    s.start = newMs;
+                } else if (dragInfo.type === 'out') {
+                    if (newMs <= s.start) newMs = s.start + 1; // Prevent crossing IN
+                    s.end = newMs;
+                }
+
+                // Live preview time
+                if (video.src) {
+                    video.currentTime = newMs / 1000;
+                    updateWaveformPlayhead();
+                }
+
+                // Instead of a full renderAll which takes away focus, just redraw the waveform
+                drawWaveform();
+                return;
+            }
+
+            // Not dragging, check hover for cursor
+            let cursor = 'pointer';
+            for (let i = 0; i < subs.length; i++) {
+                const s = subs[i];
+                if (Math.abs(s.start - hoverMs) < hoverToleranceMs) {
+                    cursor = 'w-resize';
+                    break;
+                }
+                if (Math.abs(s.end - hoverMs) < hoverToleranceMs) {
+                    cursor = 'e-resize';
+                    break;
+                }
+            }
+            canvas.style.cursor = cursor;
+        });
+
+        document.getElementById('waveformCanvas')?.addEventListener('mousedown', e => {
+            if (!audioBuffer) return;
+            const canvas = document.getElementById('waveformCanvas');
+            const rect = canvas.getBoundingClientRect();
+            const x = e.clientX - rect.left;
+            const clickMs = (x / zoomLevel) * 1000;
+            const hoverToleranceMs = (10 / zoomLevel) * 1000;
+
+            let clickedEdge = false;
+            for (let i = 0; i < subs.length; i++) {
+                const s = subs[i];
+                if (Math.abs(s.start - clickMs) < hoverToleranceMs) {
+                    pushHistory();
+                    dragInfo = { idx: i, type: 'in' };
+                    clickedEdge = true;
+                    e.preventDefault();
+                    break;
+                }
+                if (Math.abs(s.end - clickMs) < hoverToleranceMs) {
+                    pushHistory();
+                    dragInfo = { idx: i, type: 'out' };
+                    clickedEdge = true;
+                    e.preventDefault();
+                    break;
+                }
+            }
+
+            if (!clickedEdge) {
+                // Normal click seek
+                video.currentTime = Math.max(0, x / zoomLevel);
+                updateWaveformPlayhead();
+                if (video.paused) {
+                    const cur = video.currentTime, dur = video.duration || 1;
+                    document.getElementById('progressFill').style.width = (cur / dur * 100) + '%';
+                    document.getElementById('curTime').textContent = secToTC(cur);
+                }
+            }
+        });
+
+        window.addEventListener('mouseup', () => {
+            if (dragInfo) {
+                dragInfo = null;
+                renderAll(); // Full render to update the list view
+            }
+            window.isDraggingWaveform = false;
+        });
 
         // Restore on page load
         autoRestore();
