@@ -1170,10 +1170,10 @@
           <div class="col-text">
             <textarea class="${s.text.length > 20 ? 'text-warning' : ''}" rows="${Math.max(1, s.text.split('\n').length)}"
               onclick="event.stopPropagation()"
-              onkeydown="if(event.key==='Enter' && !event.shiftKey) { event.preventDefault(); this.blur(); }"
-              oninput="handleInput(this); this.rows = this.value.split('\\n').length;"
-              onchange="updateText(${i},this.value)"
-              onfocus="selectedIdx = ${i};">${escAttr(s.text)}</textarea>
+              onkeydown="if(event.key==='Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); this.blur(); }"
+              oninput="handleTextInput(this, ${i});"
+              onblur="commitText(${i}, this.value);"
+              onfocus="selectedIdx = ${i}; _textBeforeEdit = this.value;">${escAttr(s.text)}</textarea>
             <div class="char-count ${s.text.length > 20 ? 'warning' : ''}" title="20文字以上は注意">${s.text.length}</div>
           </div>
           <div class="col-actions">
@@ -1194,6 +1194,37 @@
         function updateTC(i, field, val) { pushHistory(); subs[i][field] = tcToMs(val); autoSave(); }
         function updateText(i, val) { pushHistory(); subs[i].text = val; autoSave(); }
 
+        // _textBeforeEdit: フォーカス時のテキストを記録（undoのため）
+        let _textBeforeEdit = '';
+
+        // oninput: DOMを再生成せずデータのみ更新
+        function handleTextInput(el, i) {
+            subs[i].text = el.value;
+            el.rows = el.value.split('\n').length || 1;
+            const len = el.value.length;
+            const countEl = el.nextElementSibling;
+            if (countEl && countEl.classList.contains('char-count')) {
+                countEl.textContent = len;
+                if (len > 20) {
+                    el.classList.add('text-warning');
+                    countEl.classList.add('warning');
+                } else {
+                    el.classList.remove('text-warning');
+                    countEl.classList.remove('warning');
+                }
+            }
+        }
+
+        // onblur: フォーカスアウト時にhistoryへ記録してautosave
+        function commitText(i, val) {
+            if (val !== _textBeforeEdit) {
+                pushHistory();
+                subs[i].text = val;
+                autoSave();
+            }
+        }
+
+        // handleInput は後方互換のため残す（直接は使わない）
         function handleInput(el) {
             const len = el.value.length;
             const countEl = el.nextElementSibling;
