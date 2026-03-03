@@ -877,7 +877,7 @@
         <div class="field">
             <label>フレームレート</label>
             <div class="select-wrap">
-                <select id="fps">
+                <select id="fps" onchange="updateOffsetDisplay()">
                     <option value="24000/1001">23.976 fps</option>
                     <option value="24/1">24 fps</option>
                     <option value="25/1">25 fps</option>
@@ -929,11 +929,24 @@
             </label>
         </div>
         <div class="field">
-            <label>フレームオフセット</label>
+            <label>タイミング調整</label>
             <div class="offset-row">
-                <input type="number" id="frameOffset" value="0" step="1" />
+                <input type="number" id="frameOffset" value="0" step="1" oninput="updateOffsetDisplay()" />
                 <span class="offset-unit">フレーム</span>
+                <span id="offsetMsDisplay"
+                    style="font-size:10px; color:var(--accent); margin-left:6px; font-family:'Menlo',monospace;">( 0 ms
+                    )</span>
             </div>
+            <div style="font-size:9px; color:var(--text-dim); margin-top:4px;">正 = 字幕を遅らせる / 負 = 字幕を早める</div>
+        </div>
+        <div class="field">
+            <label
+                style="display:flex; align-items:center; gap:6px; cursor:pointer; text-transform:none; letter-spacing:0;">
+                <input type="checkbox" id="autoOffsetEnabled" style="width:auto; margin:0;" />
+                <span style="font-size:11px; color:var(--text-secondary);">話出しを自動で 0秒 に調整</span>
+            </label>
+            <div id="autoOffsetInfo" style="font-size:9px; color:var(--text-dim); margin-top:4px; padding-left:20px;">—
+                SRTを読み込むと話出し時刻を表示</div>
         </div>
     </div>
 
@@ -1088,6 +1101,7 @@
                 if (subs.length > 0) {
                     renderAll();
                     document.getElementById('exportBtn').disabled = false;
+                    updateAutoOffsetInfo();
                     toast('success', `${subs.length} 件の字幕を読み込みました`);
                 } else {
                     toast('error', '字幕が見つかりません');
@@ -1127,6 +1141,22 @@
                 if (txt && end > start) r.push({ start, end, text: txt });
             }
             return r;
+        }
+
+        function updateAutoOffsetInfo() {
+            const info = document.getElementById('autoOffsetInfo');
+            if (!info) return;
+            if (subs.length > 0) {
+                const t = subs[0].start;
+                const h = Math.floor(t / 3600000);
+                const m = Math.floor((t % 3600000) / 60000);
+                const s = Math.floor((t % 60000) / 1000);
+                const ms = t % 1000;
+                const tcStr = `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')},${String(ms).padStart(3, '0')}`;
+                info.innerHTML = `話出し: <span style="color:var(--green); font-family:'Menlo',monospace;">${tcStr}</span> → 0秒にぺったんにシフト (-${t}ms)`;
+            } else {
+                info.textContent = '— SRTを読み込むと話出し時刻を表示';
+            }
         }
 
         // ═══ RENDER ═══
@@ -1531,7 +1561,9 @@
             const name = srtFileName || 'Subtitles';
             const [width, height] = document.getElementById('resolution').value.split('x');
             const frameDur = `${fpsDen}/${fpsNum}s`;
-            const adj = subs.map(s => ({ start: Math.max(0, s.start + offsetMs), end: Math.max(0, s.end + offsetMs), text: s.text })).filter(s => s.end > s.start);
+            const autoOffsetEnabled = document.getElementById('autoOffsetEnabled').checked;
+            const autoOffset = (autoOffsetEnabled && subs.length > 0) ? subs[0].start : 0;
+            const adj = subs.map(s => ({ start: Math.max(0, s.start - autoOffset + offsetMs), end: Math.max(0, s.end - autoOffset + offsetMs), text: s.text })).filter(s => s.end > s.start);
             const totalMs = Math.max(...adj.map(s => s.end)) + 2000;
             const totalTime = msToFCPTime(totalMs, fpsNum, fpsDen);
             const isDF = (fpsNum === 30000 && fpsDen === 1001) || (fpsNum === 60000 && fpsDen === 1001);
@@ -1571,7 +1603,26 @@ ${clips}
 </fcpxml>`;
             const blob = new Blob([xml], { type: 'application/xml' });
             const saved = await saveFile(blob, name + '.fcpxml', 'FCPXML File', { 'application/xml': ['.fcpxml'] });
-            if (saved) toast('success', `✓ ${adj.length} 件をFCPXMLに書き出しました`);
+            if (saved) {
+                const parts = [];
+                if (autoOffset > 0) parts.push(`話出し調整: -${autoOffset}ms`);
+                if (frameOffset !== 0) parts.push(`フレーム調整: ${offsetMs > 0 ? '+' : ''}${offsetMs}ms`);
+                const detail = parts.length > 0 ? ` (${parts.join(', ')})` : '';
+                toast('success', `✓ ${adj.length} 件をFCPXMLに書き出しました${detail}`);
+            }
+        }
+
+        function updateOffsetDisplay() {
+            const fpsVal = document.getElementById('fps').value;
+            const parts = fpsVal.split('/').map(Number);
+            const fpsNum = parts[0], fpsDen = parts[1];
+            const frameOffset = parseInt(document.getElementById('frameOffset').value || '0');
+            const offsetMs = Math.round(frameOffset * (fpsDen / fpsNum) * 1000);
+            const display = document.getElementById('offsetMsDisplay');
+            if (display) {
+                display.textContent = `( ${offsetMs > 0 ? '+' : ''}${offsetMs} ms )`;
+                display.style.color = offsetMs !== 0 ? 'var(--orange)' : 'var(--accent)';
+            }
         }
 
         // ═══ TOAST ═══
