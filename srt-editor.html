@@ -720,7 +720,7 @@
         }
 
         .settings-panel .field select,
-        .settings-panel .field input {
+        .settings-panel .field input:not([type="checkbox"]) {
             width: 100%;
             background: var(--bg-mid);
             border: 1px solid var(--border);
@@ -734,10 +734,20 @@
             -webkit-appearance: none;
         }
 
+        .settings-panel .field input[type="checkbox"] {
+            appearance: auto;
+            -webkit-appearance: auto;
+            width: 14px;
+            height: 14px;
+            cursor: pointer;
+            accent-color: var(--accent);
+        }
+
         .settings-panel .field select:focus,
-        .settings-panel .field input:focus {
+        .settings-panel .field input:not([type="checkbox"]):focus {
             border-color: var(--accent);
         }
+
 
         .settings-panel .select-wrap {
             position: relative;
