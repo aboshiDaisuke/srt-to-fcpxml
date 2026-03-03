@@ -1210,7 +1210,7 @@
           <div class="col-text">
             <textarea class="${s.text.length > 20 ? 'text-warning' : ''}" rows="${Math.max(1, s.text.split('\n').length)}"
               onclick="event.stopPropagation()"
-              onkeydown="if(event.key==='Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); this.blur(); }"
+              onkeydown="handleTextareaKeydown(event, ${i});"
               oninput="handleTextInput(this, ${i});"
               onblur="commitText(${i}, this.value);"
               onfocus="selectedIdx = ${i}; _textBeforeEdit = this.value;">${escAttr(s.text)}</textarea>
@@ -1236,6 +1236,31 @@
 
         // _textBeforeEdit: フォーカス時のテキストを記録（undoのため）
         let _textBeforeEdit = '';
+
+        // Tabキーで次の字幕に移動 / Enterでblur
+        function handleTextareaKeydown(e, i) {
+            if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
+                e.preventDefault();
+                e.target.blur();
+                return;
+            }
+            if (e.key === 'Tab') {
+                e.preventDefault();
+                const next = e.shiftKey ? i - 1 : i + 1;
+                if (next >= 0 && next < subs.length) {
+                    commitText(i, e.target.value);
+                    selectRow(next);
+                    scrollToRow(next);
+                    setTimeout(() => {
+                        const nextRow = document.getElementById(`row-${next}`);
+                        if (nextRow) {
+                            const ta = nextRow.querySelector('textarea');
+                            if (ta) { ta.focus(); ta.select(); }
+                        }
+                    }, 10);
+                }
+            }
+        }
 
         // oninput: DOMを再生成せずデータのみ更新
         function handleTextInput(el, i) {
