@@ -317,6 +317,40 @@
             gap: 2px;
         }
 
+        .vc-speed-group {
+            display: flex;
+            align-items: center;
+            gap: 2px;
+            margin-left: 8px;
+            border-left: 1px solid rgba(255, 255, 255, 0.1);
+            padding-left: 8px;
+        }
+
+        .vc-speed-btn {
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            color: var(--text-secondary);
+            font-size: 10px;
+            font-weight: 600;
+            cursor: pointer;
+            padding: 3px 6px;
+            border-radius: 3px;
+            line-height: 1;
+            transition: all 0.15s;
+            font-family: 'Inter', monospace;
+        }
+
+        .vc-speed-btn:hover {
+            background: rgba(255, 255, 255, 0.12);
+            color: var(--text);
+        }
+
+        .vc-speed-btn.active {
+            background: var(--accent);
+            border-color: var(--accent);
+            color: #fff;
+        }
+
         .vc-btn {
             background: none;
             border: none;
@@ -330,6 +364,12 @@
 
         .vc-btn:hover {
             background: rgba(255, 255, 255, 0.1);
+        }
+
+        .vc-btn.active {
+            background: var(--accent);
+            color: #fff;
+            border-radius: 4px;
         }
 
         .vc-btn.small {
@@ -991,13 +1031,27 @@
                 </div>
                 <div class="vc-bottom">
                     <div class="vc-buttons">
+                        <button class="vc-btn small" id="reversePlyBtn" onclick="toggleReversePlay()"
+                            title="逆再生（現在の速度）">⏴⏴</button>
                         <button class="vc-btn small" onclick="seekRel(-5)">◁◁</button>
                         <button class="vc-btn small" onclick="seekRel(-1)">◁</button>
                         <button class="vc-btn" id="playBtn" onclick="togglePlay()">▶</button>
                         <button class="vc-btn small" onclick="seekRel(1)">▷</button>
                         <button class="vc-btn small" onclick="seekRel(5)">▷▷</button>
+                        <div class="vc-speed-group">
+                            <button class="vc-speed-btn" id="speedBtn05" onclick="setPlaybackRate(0.5)"
+                                title="再生速度 0.5x">0.5x</button>
+                            <button class="vc-speed-btn active" id="speedBtn10" onclick="setPlaybackRate(1)"
+                                title="再生速度 1x (通常)">1x</button>
+                            <button class="vc-speed-btn" id="speedBtn15" onclick="setPlaybackRate(1.5)"
+                                title="再生速度 1.5x">1.5x</button>
+                            <button class="vc-speed-btn" id="speedBtn20" onclick="setPlaybackRate(2)"
+                                title="再生速度 2x">2x</button>
+                        </div>
                     </div>
                     <div class="vc-time"><span id="curTime">00:00:00.000</span> / <span id="totTime">00:00:00.000</span>
+                        <span id="speedIndicator"
+                            style="margin-left:8px; font-size:10px; color:var(--accent); font-weight:600;">1x</span>
                     </div>
                 </div>
             </div>
@@ -1405,16 +1459,164 @@
         }
 
         // ═══ VIDEO CONTROLS ═══
-        function togglePlay() { if (video.paused) video.play(); else video.pause(); }
+        function togglePlay() {
+            stopReversePlay();
+            if (video.paused) {
+                _jklState = 'forward'; _jklSpeedIdx = 0;
+                video.play();
+            } else {
+                _jklState = 'stopped'; _jklSpeedIdx = 0;
+                setPlaybackRate(1); // Space一時停止時は1xリセット
+                video.pause();
+            }
+        }
         function seekRel(sec) {
+            stopReversePlay();
             video.currentTime = Math.max(0, Math.min(video.duration || 0, video.currentTime + sec));
             if (video.paused && typeof updateWaveformPlayhead === 'function') updateWaveformPlayhead();
         }
         function seekTo(i) {
+            stopReversePlay();
             if (video.src) {
                 video.currentTime = subs[i].start / 1000;
                 if (video.paused && typeof updateWaveformPlayhead === 'function') updateWaveformPlayhead();
             }
+        }
+
+        // ─── 逆再生 ───
+        // setInterval固定タイマー方式: 壁時計基準でシーク速度に依存しない
+        let _reverseActive = false;
+        let _reverseInterval = null;
+        let _reverseHandler = null; // 互換性維持用（旧seeked方式）
+        function toggleReversePlay() {
+            if (_reverseActive) { stopReversePlay(); }
+            else { startReversePlay(); }
+        }
+        function startReversePlay() {
+            if (!video.src || isNaN(video.duration) || video.duration === 0) {
+                toast('error', '動画を読み込んでください'); return;
+            }
+            if (video.currentTime <= 0) { toast('error', '先頭です'); return; }
+            if (!video.paused) video.pause();
+
+            const btn = document.getElementById('reversePlyBtn');
+            if (btn) btn.classList.add('active');
+
+            const rate = Math.max(0.1, video.playbackRate || 1);
+            // 1xで30fps相当: 33ms毎に 1/30秒 巻き戻す
+            const FPS = 30;
+            const intervalMs = 1000 / FPS;
+            const stepSec = rate / FPS;
+
+            _reverseActive = true;
+            _reverseInterval = setInterval(() => {
+                if (!_reverseActive) { clearInterval(_reverseInterval); return; }
+                if (video.seeking) return; // 前のシークが完了するまで待機
+                const next = video.currentTime - stepSec;
+                if (next <= 0) {
+                    video.currentTime = 0;
+                    stopReversePlay();
+                    _jklState = 'stopped'; _jklSpeedIdx = 0;
+                    if (typeof updateWaveformPlayhead === 'function') updateWaveformPlayhead();
+                    return;
+                }
+                video.currentTime = next;
+                if (typeof updateWaveformPlayhead === 'function') updateWaveformPlayhead();
+            }, intervalMs);
+        }
+        function stopReversePlay() {
+            _reverseActive = false;
+            if (_reverseInterval) {
+                clearInterval(_reverseInterval);
+                _reverseInterval = null;
+            }
+            // 旧seekedリスナー保険（念のため）
+            if (_reverseHandler) {
+                video.removeEventListener('seeked', _reverseHandler);
+                _reverseHandler = null;
+            }
+            const btn = document.getElementById('reversePlyBtn');
+            if (btn) btn.classList.remove('active');
+        }
+        let reversePlayId = null; // 互換性維持用
+
+
+        // ─── JKL シャトル (Final Cut Pro スタイル) ───
+        const JKL_SPEEDS = [1, 2, 4, 8];
+        let _jklState = 'stopped'; // 'stopped' | 'forward' | 'reverse'
+        let _jklSpeedIdx = 0;
+
+        function jklJ() {
+            if (!video.src || isNaN(video.duration)) return;
+            if (_jklState === 'reverse') {
+                // 既に逆再生中 → 速度を上げる
+                _jklSpeedIdx = Math.min(_jklSpeedIdx + 1, JKL_SPEEDS.length - 1);
+            } else {
+                // 逆再生開始
+                _jklState = 'reverse';
+                _jklSpeedIdx = 0;
+                if (!video.paused) video.pause();
+            }
+            stopReversePlay();
+            const rate = JKL_SPEEDS[_jklSpeedIdx];
+            setPlaybackRate(rate);   // video.playbackRateを設定＋UI更新
+            startReversePlay();      // video.playbackRateを読んで速度使用
+            toast('info', `逆再生 ${rate}x`);
+        }
+
+        function jklK() {
+            stopReversePlay();
+            _jklState = 'stopped';
+            _jklSpeedIdx = 0;
+            video.pause();
+            setPlaybackRate(1); // Kキーは常に1xリセット
+        }
+
+        function jklL() {
+            if (!video.src || isNaN(video.duration)) return;
+            stopReversePlay();
+            if (_jklState === 'forward') {
+                // 既に順再生中 → 速度を上げる
+                _jklSpeedIdx = Math.min(_jklSpeedIdx + 1, JKL_SPEEDS.length - 1);
+            } else {
+                // 再生開始
+                _jklState = 'forward';
+                _jklSpeedIdx = 0;
+            }
+            const rate = JKL_SPEEDS[_jklSpeedIdx];
+            setPlaybackRate(rate);
+            if (video.paused) video.play();
+            toast('info', `再生 ${rate}x`);
+        }
+
+        // 再生速度コントロール
+        const SPEED_STEPS = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 2];
+        function setPlaybackRate(rate) {
+            video.playbackRate = rate;
+            // ボタンのアクティブ状態を更新
+            // IDは rate×10 の2桁ゼロ埋め: 0.5→'05', 1→'10', 1.5→'15', 2→'20'
+            [0.5, 1, 1.5, 2].forEach(r => {
+                const id = 'speedBtn' + String(Math.round(r * 10)).padStart(2, '0');
+                const btn = document.getElementById(id);
+                if (btn) btn.classList.toggle('active', Math.abs(r - rate) < 0.001);
+            });
+            // 速度インジケータ文字を更新
+            const ind = document.getElementById('speedIndicator');
+            if (ind) ind.textContent = rate === 1 ? '' : `${rate}x`;
+        }
+        function changeSpeedStep(delta) {
+            const cur = video.playbackRate;
+            const idx = SPEED_STEPS.findIndex(s => Math.abs(s - cur) < 0.01);
+            const nextIdx = Math.max(0, Math.min(SPEED_STEPS.length - 1, (idx === -1 ? SPEED_STEPS.indexOf(1) : idx) + delta));
+            const newRate = SPEED_STEPS[nextIdx];
+            video.playbackRate = newRate;
+            // UIボタンの更新
+            [0.5, 1, 1.5, 2].forEach(r => {
+                const id = 'speedBtn' + String(r).replace('.', '');
+                const btn = document.getElementById(id);
+                if (btn) btn.classList.toggle('active', Math.abs(r - newRate) < 0.01);
+            });
+            toast('info', `再生速度: ${newRate}x`);
         }
 
         video.addEventListener('play', () => {
@@ -1424,6 +1626,7 @@
         video.addEventListener('pause', () => {
             document.getElementById('playBtn').textContent = '▶';
             if (typeof stopWaveformAnimation === 'function') stopWaveformAnimation();
+            // J/K/L側で明示的にリセットするため、ここでは自動リセットしない
         });
 
         video.addEventListener('timeupdate', () => {
@@ -1501,6 +1704,9 @@
             if (e.key === 'ArrowDown' && selectedIdx < subs.length - 1) { e.preventDefault(); selectRow(selectedIdx + 1); scrollToRow(selectedIdx); }
             if (e.key === 'Delete' && selectedIdx >= 0) { e.preventDefault(); deleteRow(selectedIdx); }
             if (e.key === 'Enter' && selectedIdx >= 0) { e.preventDefault(); seekTo(selectedIdx); }
+            if (e.code === 'KeyJ') { e.preventDefault(); jklJ(); }  // J: 逆再生
+            if (e.code === 'KeyK') { e.preventDefault(); jklK(); }  // K: 停止
+            if (e.code === 'KeyL') { e.preventDefault(); jklL(); }  // L: 再生（押すたびに速度アップ）
         });
 
         // ═══ SETTINGS & SEARCH ═══
