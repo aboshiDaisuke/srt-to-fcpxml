@@ -801,7 +801,46 @@
             transform: translateY(-50%);
             color: var(--text-dim);
             pointer-events: none;
-            font-size: 9px;
+            font-size: 10px;
+        }
+
+        /* ── Loading Spinner ── */
+        .loading-overlay {
+            position: absolute;
+            inset: 0;
+            background: rgba(17, 17, 17, 0.8);
+            display: none;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            z-index: 100;
+            backdrop-filter: blur(4px);
+        }
+
+        .loading-overlay.show {
+            display: flex;
+        }
+
+        .spinner {
+            width: 30px;
+            height: 30px;
+            border: 3px solid rgba(78, 142, 247, 0.2);
+            border-top: 3px solid var(--accent);
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+            margin-bottom: 12px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .loading-text {
+            font-size: 11px;
+            font-weight: 500;
+            color: var(--accent);
+            letter-spacing: 0.05em;
         }
 
         .settings-panel .offset-row {
@@ -1059,6 +1098,10 @@
 
         <!-- Waveform -->
         <div class="waveform-container" id="waveformContainer">
+            <div class="loading-overlay" id="waveLoading">
+                <div class="spinner"></div>
+                <div class="loading-text" id="loadingText">音声データを解析中...</div>
+            </div>
             <div class="waveform-playhead" id="waveformPlayhead"></div>
             <div class="waveform-scroll" id="waveformScroll">
                 <div class="wave-spacer" id="waveSpacerLeft"></div>
@@ -1111,6 +1154,7 @@
         let selectedIdx = -1;
         let playingIdx = -1;
         let srtFileName = '';
+        let videoFileName = '';
         let autoScrollEnabled = true;
         let searchIdx = -1;
         const STORAGE_KEY = 'srt-editor-autosave';
@@ -1147,6 +1191,7 @@
             video.src = URL.createObjectURL(file);
             video.style.display = 'block';
             video.load();
+            videoFileName = file.name.replace(/\.[^/.]+$/, ""); // 拡張子を除去して保持
             document.getElementById('videoFileName').textContent = file.name;
             document.getElementById('dropVideo').classList.add('loaded');
             document.getElementById('videoControls').style.display = 'flex';
@@ -1279,13 +1324,27 @@
           </div>
         </div>
       `).join('');
+
+            autoSave();
+            if (typeof drawWaveform === 'function') drawWaveform();
         }
 
         function escAttr(s) { return s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;'); }
 
         function selectRow(i) { selectedIdx = i; renderAll(); }
 
-        function updateTC(i, field, val) { pushHistory(); subs[i][field] = tcToMs(val); autoSave(); }
+        function updateTC(i, field, val) {
+            pushHistory();
+            const newMs = tcToMs(val);
+            if (field === 'start') {
+                subs[i].start = newMs;
+                if (subs[i].start >= subs[i].end) subs[i].end = subs[i].start + 500; // 逆転防止: 最低500ms確保
+            } else {
+                subs[i].end = newMs;
+                if (subs[i].end <= subs[i].start) subs[i].start = Math.max(0, subs[i].end - 500);
+            }
+            renderAll();
+        }
         function updateText(i, val) { pushHistory(); subs[i].text = val; autoSave(); }
 
         // _textBeforeEdit: フォーカス時のテキストを記録（undoのため）
@@ -1343,21 +1402,6 @@
             }
         }
 
-        // handleInput は後方互換のため残す（直接は使わない）
-        function handleInput(el) {
-            const len = el.value.length;
-            const countEl = el.nextElementSibling;
-            if (countEl && countEl.classList.contains('char-count')) {
-                countEl.textContent = len;
-                if (len > 20) {
-                    el.classList.add('text-warning');
-                    countEl.classList.add('warning');
-                } else {
-                    el.classList.remove('text-warning');
-                    countEl.classList.remove('warning');
-                }
-            }
-        }
 
         // ═══ HISTORY (UNDO) ═══
         let historyStack = [];
@@ -1432,15 +1476,27 @@
         function setIn(i) {
             if (!video.src || isNaN(video.currentTime)) { toast('error', '動画を読み込んでください'); return; }
             pushHistory();
-            subs[i].start = Math.round(video.currentTime * 1000);
+            const nowMs = Math.round(video.currentTime * 1000);
+            subs[i].start = nowMs;
+            // OUT点より後ろになったら、OUT点を1秒後にずらす
+            if (subs[i].start >= subs[i].end) {
+                subs[i].end = subs[i].start + 1000;
+            }
             renderAll();
+            toast('info', 'IN点を設定しました');
         }
 
         function setOut(i) {
             if (!video.src || isNaN(video.currentTime)) { toast('error', '動画を読み込んでください'); return; }
             pushHistory();
-            subs[i].end = Math.round(video.currentTime * 1000);
+            const nowMs = Math.round(video.currentTime * 1000);
+            if (nowMs <= subs[i].start) {
+                toast('error', 'IN点より前には設定できません');
+                return;
+            }
+            subs[i].end = nowMs;
             renderAll();
+            toast('info', 'OUT点を設定しました');
         }
 
         function addSubtitle() {
@@ -1484,10 +1540,9 @@
         }
 
         // ─── 逆再生 ───
-        // setInterval固定タイマー方式: 壁時計基準でシーク速度に依存しない
+        // setInterval方式
         let _reverseActive = false;
         let _reverseInterval = null;
-        let _reverseHandler = null; // 互換性維持用（旧seeked方式）
         function toggleReversePlay() {
             if (_reverseActive) { stopReversePlay(); }
             else { startReversePlay(); }
@@ -1530,15 +1585,9 @@
                 clearInterval(_reverseInterval);
                 _reverseInterval = null;
             }
-            // 旧seekedリスナー保険（念のため）
-            if (_reverseHandler) {
-                video.removeEventListener('seeked', _reverseHandler);
-                _reverseHandler = null;
-            }
             const btn = document.getElementById('reversePlyBtn');
             if (btn) btn.classList.remove('active');
         }
-        let reversePlayId = null; // 互換性維持用
 
 
         // ─── JKL シャトル (Final Cut Pro スタイル) ───
@@ -1799,11 +1848,13 @@
             const frameOffset = parseInt(document.getElementById('frameOffset').value || '0');
             const offsetMs = Math.round(frameOffset * (fpsDen / fpsNum) * 1000);
             const vPos = document.getElementById('verticalPos').value;
-            const name = srtFileName || 'Subtitles';
+            const name = srtFileName || videoFileName || 'Subtitles';
             const [width, height] = document.getElementById('resolution').value.split('x');
             const frameDur = `${fpsDen}/${fpsNum}s`;
             const autoOffsetEnabled = document.getElementById('autoOffsetEnabled').checked;
             const autoOffset = (autoOffsetEnabled && subs.length > 0) ? subs[0].start : 0;
+
+
             const adj = subs.map(s => ({ start: Math.max(0, s.start - autoOffset + offsetMs), end: Math.max(0, s.end - autoOffset + offsetMs), text: s.text })).filter(s => s.end > s.start);
             const totalMs = Math.max(...adj.map(s => s.end)) + 2000;
             const totalTime = msToFCPTime(totalMs, fpsNum, fpsDen);
@@ -1882,6 +1933,7 @@ ${clips}
                 const data = {
                     subs,
                     srtFileName,
+                    videoFileName,
                     settings: {
                         fps: document.getElementById('fps').value,
                         resolution: document.getElementById('resolution').value,
@@ -1914,6 +1966,7 @@ ${clips}
         function restoreData(data) {
             subs = data.subs || [];
             srtFileName = data.srtFileName || '';
+            videoFileName = data.videoFileName || '';
             if (data.settings) {
                 if (data.settings.fps) document.getElementById('fps').value = data.settings.fps;
                 if (data.settings.resolution) document.getElementById('resolution').value = data.settings.resolution;
@@ -2006,9 +2059,6 @@ ${clips}
             if (saved) toast('success', '💾 VTTとして保存しました');
         }
 
-        // Hook auto-save into operations that modify subs
-        const _origRenderAll = renderAll;
-        renderAll = function () { _origRenderAll(); autoSave(); if (typeof drawWaveform === 'function') drawWaveform(); };
 
         // ═══ WAVEFORM ═══
         let audioCtx;
@@ -2019,27 +2069,31 @@ ${clips}
 
         function extractAudio(file) {
             document.getElementById('waveformContainer').style.display = 'block';
+            const loading = document.getElementById('waveLoading');
+            loading.classList.add('show');
+            document.getElementById('loadingText').textContent = '音声データを読み込み中...';
+
             const canvas = document.getElementById('waveformCanvas');
             const scrollArea = document.getElementById('waveformScroll');
             const ctx = canvas.getContext('2d');
             canvas.width = scrollArea.clientWidth;
             canvas.height = scrollArea.clientHeight || 100;
             ctx.clearRect(0, 0, canvas.width, canvas.height);
-            ctx.fillStyle = '#98989f';
-            ctx.font = '11px sans-serif';
-            ctx.fillText('音声データを読み込み・生成中...', 10, 20);
 
             const reader = new FileReader();
             reader.onload = async (e) => {
                 try {
+                    document.getElementById('loadingText').textContent = '音声データを解析中 (これには数秒かかります)...';
                     if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
                     const arrayBuffer = e.target.result;
                     audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
                     processWaveformData();
                 } catch (err) {
                     console.error('Audio decode error', err);
+                    loading.classList.remove('show');
                     ctx.clearRect(0, 0, canvas.width, canvas.height);
                     ctx.fillStyle = '#ff453a';
+                    ctx.font = '11px sans-serif';
                     ctx.fillText('音声の解析に失敗しました（動画が長い・非対応フォーマットなどの理由）', 10, 20);
                 }
             };
@@ -2048,6 +2102,7 @@ ${clips}
 
         function processWaveformData() {
             if (!audioBuffer) return;
+            document.getElementById('loadingText').textContent = '波形を描画中...';
             const channelData = audioBuffer.getChannelData(0);
             const chunkDur = 0.05;
             const chunkSize = Math.floor(audioBuffer.sampleRate * chunkDur);
@@ -2060,6 +2115,7 @@ ${clips}
                 }
                 waveData.push(max);
             }
+            document.getElementById('waveLoading').classList.remove('show');
             drawWaveform();
         }
 
@@ -2167,7 +2223,6 @@ ${clips}
 
         // ── Drag and Drop Logic ──
         let dragInfo = null;
-        let pMouseMove = null;
 
         document.getElementById('waveformCanvas')?.addEventListener('mousemove', e => {
             if (!audioBuffer) return;
