@@ -1269,7 +1269,7 @@
                 const s = Math.floor((t % 60000) / 1000);
                 const ms = t % 1000;
                 const tcStr = `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')},${String(ms).padStart(3, '0')}`;
-                info.innerHTML = `話出し: <span style="color:var(--green); font-family:'Menlo',monospace;">${tcStr}</span> → 0秒にぺったんにシフト (-${t}ms)`;
+                info.innerHTML = `話出し: <span style="color:var(--green); font-family:'Menlo',monospace;">${tcStr}</span> → 0秒にぴったりシフト (-${t}ms)`;
             } else {
                 info.textContent = '— SRTを読み込むと話出し時刻を表示';
             }
@@ -1444,7 +1444,6 @@
 
         function splitRow(i) {
             const s = subs[i];
-            pushHistory();
 
             // テキストのカーソル位置を取得
             const row = document.getElementById(`row-${i}`);
@@ -1472,6 +1471,7 @@
 
             if (splitMs <= s.start || splitMs >= s.end) { toast('error', '分割位置が範囲外です'); return; }
 
+            pushHistory();
             const newSub = { start: splitMs, end: s.end, text: textAfter };
             s.end = splitMs;
             s.text = textBefore;
@@ -1495,12 +1495,12 @@
 
         function setOut(i) {
             if (!video.src || isNaN(video.currentTime)) { toast('error', '動画を読み込んでください'); return; }
-            pushHistory();
             const nowMs = Math.round(video.currentTime * 1000);
             if (nowMs <= subs[i].start) {
                 toast('error', 'IN点より前には設定できません');
                 return;
             }
+            pushHistory();
             subs[i].end = nowMs;
             renderAll();
             toast('info', 'OUT点を設定しました');
@@ -1513,6 +1513,7 @@
             selectedIdx = subs.length - 1;
             renderAll();
             document.getElementById('exportBtn').disabled = false;
+            checkOverlay();
             scrollToRow(selectedIdx);
         }
 
