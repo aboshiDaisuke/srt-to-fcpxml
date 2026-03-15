@@ -929,6 +929,12 @@
             background: var(--red);
             color: #fff;
         }
+
+        .toast.info {
+            background: var(--bg-elevated);
+            color: var(--text);
+            border: 1px solid var(--border-light);
+        }
     </style>
 </head>
 
@@ -1188,6 +1194,7 @@
         document.getElementById('srtInput').addEventListener('change', e => { if (e.target.files[0]) loadSrt(e.target.files[0]); });
 
         function loadVideo(file) {
+            if (video.src && video.src.startsWith('blob:')) URL.revokeObjectURL(video.src);
             video.src = URL.createObjectURL(file);
             video.style.display = 'block';
             video.load();
@@ -1661,7 +1668,7 @@
             video.playbackRate = newRate;
             // UIボタンの更新
             [0.5, 1, 1.5, 2].forEach(r => {
-                const id = 'speedBtn' + String(r).replace('.', '');
+                const id = 'speedBtn' + String(Math.round(r * 10)).padStart(2, '0');
                 const btn = document.getElementById(id);
                 if (btn) btn.classList.toggle('active', Math.abs(r - newRate) < 0.01);
             });
@@ -1720,7 +1727,11 @@
         });
 
         function secToTC(s) {
-            const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = Math.floor(s % 60), ms = Math.round((s % 1) * 1000);
+            const totalMs = Math.round(s * 1000);
+            const h = Math.floor(totalMs / 3600000);
+            const m = Math.floor((totalMs % 3600000) / 60000);
+            const sec = Math.floor((totalMs % 60000) / 1000);
+            const ms = totalMs % 1000;
             return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}.${String(ms).padStart(3, '0')}`;
         }
 
