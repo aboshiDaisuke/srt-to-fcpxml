@@ -1382,9 +1382,13 @@
             }
         }
 
+        // blur前のカーソル位置を保持（✂ボタンクリック時にblurで失われるため）
+        let _savedCursor = { idx: -1, pos: -1 };
+
         // oninput: DOMを再生成せずデータのみ更新
         function handleTextInput(el, i) {
             subs[i].text = el.value;
+            _savedCursor = { idx: i, pos: el.selectionStart };
             el.rows = el.value.split('\n').length || 1;
             const len = el.value.length;
             const countEl = el.nextElementSibling;
@@ -1445,14 +1449,17 @@
         function splitRow(i) {
             const s = subs[i];
 
-            // テキストのカーソル位置を取得
+            // テキストのカーソル位置を取得（blur後は_savedCursorにフォールバック）
             const row = document.getElementById(`row-${i}`);
             const textInput = row ? row.querySelector('.col-text textarea') : null;
-            const cursorPos = textInput ? textInput.selectionStart : -1;
+            let cursorPos = textInput ? textInput.selectionStart : -1;
+            if (cursorPos <= 0 && _savedCursor.idx === i && _savedCursor.pos > 0) {
+                cursorPos = _savedCursor.pos;
+            }
             const fullText = s.text.replace(/\n/g, ' ');
 
             let textBefore = fullText;
-            let textAfter = fullText;
+            let textAfter = '';
             let splitRatio = 0.5;
 
             if (cursorPos > 0 && cursorPos < fullText.length) {
@@ -1463,7 +1470,7 @@
             }
 
             if (!textBefore) textBefore = fullText;
-            if (!textAfter) textAfter = fullText;
+            if (!textAfter) textAfter = '';
 
             // タイムコードをテキスト比率で按分
             const duration = s.end - s.start;
