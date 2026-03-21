@@ -1228,7 +1228,7 @@
         }
 
         function checkOverlay() {
-            if ((video.src && video.src !== '') && subs.length > 0)
+            if ((videoFileName !== '' || (video.src && video.readyState > 0)) && subs.length > 0)
                 document.getElementById('dropOverlay').classList.add('hidden');
         }
 
@@ -1470,7 +1470,7 @@
             }
 
             if (!textBefore) textBefore = fullText;
-            if (!textAfter) textAfter = '';
+            if (!textAfter) textAfter = fullText; // 空にしない: 分割後も両字幕にテキストを持たせる
 
             // タイムコードをテキスト比率で按分
             const duration = s.end - s.start;
@@ -1768,8 +1768,8 @@
             if (e.key === ' ') { e.preventDefault(); togglePlay(); }
             if (e.key === 'ArrowLeft') { e.preventDefault(); seekRel(e.shiftKey ? -5 : -1); }
             if (e.key === 'ArrowRight') { e.preventDefault(); seekRel(e.shiftKey ? 5 : 1); }
-            if (e.key === 'ArrowUp' && selectedIdx > 0) { e.preventDefault(); selectRow(selectedIdx - 1); scrollToRow(selectedIdx); }
-            if (e.key === 'ArrowDown' && selectedIdx < subs.length - 1) { e.preventDefault(); selectRow(selectedIdx + 1); scrollToRow(selectedIdx); }
+            if (e.key === 'ArrowUp' && selectedIdx > 0) { e.preventDefault(); selectRow(selectedIdx - 1); scrollToRow(selectedIdx - 1); }
+            if (e.key === 'ArrowDown' && selectedIdx < subs.length - 1) { e.preventDefault(); selectRow(selectedIdx + 1); scrollToRow(selectedIdx + 1); }
             if (e.key === 'Delete' && selectedIdx >= 0) { e.preventDefault(); deleteRow(selectedIdx); }
             if (e.key === 'Enter' && selectedIdx >= 0) { e.preventDefault(); seekTo(selectedIdx); }
             if (e.code === 'KeyJ') { e.preventDefault(); jklJ(); }  // J: 逆再生
@@ -1959,7 +1959,9 @@ ${clips}
                         verticalPos: document.getElementById('verticalPos').value,
                         encoding: document.getElementById('encoding').value,
                         timeOffset: document.getElementById('frameOffset').value,
-                        layout: currentLayout
+                        layout: currentLayout,
+                        removePunctuation: document.getElementById('removePunctuation').checked,
+                        autoOffsetEnabled: document.getElementById('autoOffsetEnabled').checked
                     },
                     savedAt: new Date().toISOString()
                 };
@@ -1992,12 +1994,15 @@ ${clips}
                 if (data.settings.verticalPos) document.getElementById('verticalPos').value = data.settings.verticalPos;
                 if (data.settings.encoding) document.getElementById('encoding').value = data.settings.encoding;
                 if (data.settings.timeOffset) document.getElementById('frameOffset').value = data.settings.timeOffset;
+                if (data.settings.removePunctuation !== undefined) document.getElementById('removePunctuation').checked = data.settings.removePunctuation;
+                if (data.settings.autoOffsetEnabled !== undefined) document.getElementById('autoOffsetEnabled').checked = data.settings.autoOffsetEnabled;
                 if (data.settings.layout) {
                     currentLayout = data.settings.layout;
                     const mc = document.getElementById('mainContent');
                     mc.classList.remove('layout-top', 'layout-left', 'layout-right');
                     mc.classList.add(`layout-${currentLayout}`);
                 }
+                updateOffsetDisplay();
             }
             if (subs.length > 0) {
                 renderAll();
@@ -2239,6 +2244,15 @@ ${clips}
         }
         document.getElementById('waveformScroll')?.addEventListener('mousedown', () => { window.isDraggingWaveform = true; });
         window.addEventListener('mouseup', () => { window.isDraggingWaveform = false; });
+
+        // タブ非表示時にアニメーションを一時停止してCPUを節約
+        document.addEventListener('visibilitychange', () => {
+            if (document.hidden) {
+                stopWaveformAnimation();
+            } else if (!video.paused) {
+                startWaveformAnimation();
+            }
+        });
 
         // ── Drag and Drop Logic ──
         let dragInfo = null;
