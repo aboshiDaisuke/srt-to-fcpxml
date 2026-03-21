@@ -1024,15 +1024,22 @@
             </label>
         </div>
         <div class="field">
-            <label>タイミング調整</label>
-            <div class="offset-row">
-                <input type="number" id="frameOffset" value="0" step="1" oninput="updateOffsetDisplay()" />
-                <span class="offset-unit">フレーム</span>
-                <span id="offsetMsDisplay"
-                    style="font-size:10px; color:var(--accent); margin-left:6px; font-family:'Menlo',monospace;">( 0 ms
-                    )</span>
+            <label>書き出し時の全体オフセット</label>
+            <div style="display:flex; align-items:center; gap:4px; margin-bottom:6px;">
+                <button class="tb-btn small" onclick="addOffset(-5)" title="5フレーム早める">-5</button>
+                <button class="tb-btn small" onclick="addOffset(-1)" title="1フレーム早める">-1</button>
+                <input type="number" id="frameOffset" value="0" step="1" oninput="updateOffsetDisplay()" 
+                    style="width:50px; text-align:center; padding:5px 0;" />
+                <button class="tb-btn small" onclick="addOffset(1)" title="1フレーム遅らせる">+1</button>
+                <button class="tb-btn small" onclick="addOffset(5)" title="5フレーム遅らせる">+5</button>
             </div>
-            <div style="font-size:9px; color:var(--text-dim); margin-top:4px;">正 = 字幕を遅らせる / 負 = 字幕を早める</div>
+            <div id="offsetStatus" style="background:rgba(0,0,0,0.2); border-radius:4px; padding:6px; border:1px solid var(--border);">
+                <div id="offsetDirection" style="font-size:10px; font-weight:700; color:var(--text-dim); margin-bottom:2px;">補正なし</div>
+                <div id="offsetMsDisplay" style="font-size:11px; font-family:'Menlo',monospace; color:var(--text-dim);">0 ms (0.00 秒)</div>
+            </div>
+            <div style="font-size:9px; color:var(--text-dim); margin-top:6px; line-height:1.3;">
+                FCP上で字幕が「遅い」ならマイナス、「早い」ならプラスを入力してください。
+            </div>
         </div>
         <div class="field">
             <label
@@ -1927,16 +1934,40 @@ ${clips}
             }
         }
 
+        function addOffset(n) {
+            const el = document.getElementById('frameOffset');
+            el.value = parseInt(el.value || '0') + n;
+            updateOffsetDisplay();
+            autoSave();
+        }
+
         function updateOffsetDisplay() {
             const fpsVal = document.getElementById('fps').value;
             const parts = fpsVal.split('/').map(Number);
             const fpsNum = parts[0], fpsDen = parts[1];
             const frameOffset = parseInt(document.getElementById('frameOffset').value || '0');
             const offsetMs = Math.round(frameOffset * (fpsDen / fpsNum) * 1000);
-            const display = document.getElementById('offsetMsDisplay');
-            if (display) {
-                display.textContent = `( ${offsetMs > 0 ? '+' : ''}${offsetMs} ms )`;
-                display.style.color = offsetMs !== 0 ? 'var(--orange)' : 'var(--accent)';
+            
+            const msDisp = document.getElementById('offsetMsDisplay');
+            const dirDisp = document.getElementById('offsetDirection');
+            
+            if (!msDisp || !dirDisp) return;
+
+            if (frameOffset === 0) {
+                dirDisp.textContent = '補正なし';
+                dirDisp.style.color = 'var(--text-dim)';
+                msDisp.textContent = '0 ms (0.00 秒)';
+                msDisp.style.color = 'var(--text-dim)';
+            } else if (frameOffset > 0) {
+                dirDisp.textContent = '▶ 字幕を遅らせる';
+                dirDisp.style.color = 'var(--accent)';
+                msDisp.textContent = `+${offsetMs} ms (+${(offsetMs/1000).toFixed(2)} 秒)`;
+                msDisp.style.color = 'var(--accent)';
+            } else {
+                dirDisp.textContent = '◀ 字幕を早める';
+                dirDisp.style.color = 'var(--orange)';
+                msDisp.textContent = `${offsetMs} ms (${(offsetMs/1000).toFixed(2)} 秒)`;
+                msDisp.style.color = 'var(--orange)';
             }
         }
 
