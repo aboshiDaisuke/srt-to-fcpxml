@@ -1458,44 +1458,72 @@
         }
 
         function splitRow(i) {
-            const s = subs[i];
+            if (!video.src || video.readyState === 0) { 
+                toast('error', '動画を読み込んでください'); 
+                return; 
+            }
 
-            // テキストのカーソル位置を取得（blur後は_savedCursorにフォールバック）
+            const splitMs = Math.round(video.currentTime * 1000);
+            let s = subs[i];
+
+            // 選択された字幕の中に再生ヘッドが無い場合は、再生ヘッド直下の字幕を探す
+            if (!(splitMs > s.start && splitMs < s.end)) {
+                const foundIdx = subs.findIndex(sub => splitMs > sub.start && splitMs < sub.end);
+                if (foundIdx !== -1) {
+                    i = foundIdx;
+                    s = subs[i];
+                } else {
+                    toast('error', '再生ヘッド（赤線）が字幕の範囲内にありません');
+                    return;
+                }
+            }
+
+            // テキストのカーソル位置を取得
             const row = document.getElementById(`row-${i}`);
             const textInput = row ? row.querySelector('.col-text textarea') : null;
             let cursorPos = textInput ? textInput.selectionStart : -1;
-            if (cursorPos <= 0 && _savedCursor.idx === i && _savedCursor.pos > 0) {
+            if (cursorPos <= 0 && _savedCursor && _savedCursor.idx === i && _savedCursor.pos > 0) {
                 cursorPos = _savedCursor.pos;
             }
-            const fullText = s.text; // 改行を保持したままカーソル位置で分割
-
+            
+            const fullText = s.text;
             let textBefore = fullText;
             let textAfter = '';
-            let splitRatio = 0.5;
 
             if (cursorPos > 0 && cursorPos < fullText.length) {
-                // カーソル位置でテキストを分割
                 textBefore = fullText.slice(0, cursorPos).trim();
                 textAfter = fullText.slice(cursorPos).trim();
-                splitRatio = cursorPos / fullText.length;
+            } else {
+                const duration = s.end - s.start;
+                const timeRatio = Math.max(0, Math.min(1, (splitMs - s.start) / duration));
+                const splitIndex = Math.round(fullText.length * timeRatio);
+                textBefore = fullText.slice(0, splitIndex).trim();
+                textAfter = fullText.slice(splitIndex).trim();
             }
 
             if (!textBefore) textBefore = fullText;
-            if (!textAfter) textAfter = fullText; // 空にしない: 分割後も両字幕にテキストを持たせる
-
-            // タイムコードをテキスト比率で按分
-            const duration = s.end - s.start;
-            const splitMs = Math.round(s.start + duration * splitRatio);
-
-            if (splitMs <= s.start || splitMs >= s.end) { toast('error', '分割位置が範囲外です'); return; }
+            if (!textAfter) textAfter = fullText;
 
             pushHistory();
-            const newSub = { start: splitMs, end: s.end, text: textAfter };
+
+            // IN/OUT点の設定を分離・安全化
+            const originalEnd = s.end;
             s.end = splitMs;
             s.text = textBefore;
+
+            const newSub = { 
+                start: splitMs, 
+                end: originalEnd, 
+                text: textAfter 
+            };
+            
             subs.splice(i + 1, 0, newSub);
+
+            // 分割後に時間順を再整理し、一覧表の交差・前後関係の狂いを根本から防ぐ
+            subs.sort((a, b) => a.start - b.start);
+            
             renderAll();
-            toast('success', 'カーソル位置で分割しました');
+            toast('success', '動画位置で分割しました');
         }
 
         function setIn(i) {
