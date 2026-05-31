@@ -555,6 +555,16 @@
             background: rgba(66, 215, 125, 0.1);
         }
 
+        /* 前後の字幕と時間が重なっている行 */
+        .sub-row.overlap {
+            background: rgba(255, 69, 58, 0.10);
+            box-shadow: inset 3px 0 0 var(--red);
+        }
+
+        .sub-row.overlap .col-tc input {
+            color: var(--red);
+        }
+
         .sub-row .col-idx {
             width: 36px;
             display: flex;
@@ -949,6 +959,7 @@
             <button class="tb-btn" onclick="window.open('guide.html', '_blank')" title="使い方ガイド">📖</button>
             <button class="tb-btn" onclick="toggleLayout()" title="レイアウト変更">◨ レイアウト</button>
             <button class="tb-btn" onclick="addSubtitle()">＋ 字幕追加</button>
+            <button class="tb-btn" onclick="sortByTimeButton()" title="字幕を開始時刻順に並べ替え">↕ 時刻順</button>
             <button class="tb-btn" id="searchBtn" onclick="toggleSearchPanel()">🔍 検索・置換</button>
             <button class="tb-btn" id="settingsBtn" onclick="toggleSettings()">⚙ 設定</button>
             <button class="tb-btn" onclick="exportSRT()" title="SRTファイルとして保存">💾 SRT</button>
@@ -1197,8 +1208,8 @@
             document.getElementById('dropOverlay').classList.remove('drag-active');
             if (e.dataTransfer.files.length > 0) handleDroppedFiles(e.dataTransfer.files);
         });
-        document.getElementById('videoInput').addEventListener('change', e => { if (e.target.files[0]) loadVideo(e.target.files[0]); });
-        document.getElementById('srtInput').addEventListener('change', e => { if (e.target.files[0]) loadSrt(e.target.files[0]); });
+        document.getElementById('videoInput').addEventListener('change', e => { if (e.target.files[0]) loadVideo(e.target.files[0]); e.target.value = ''; });
+        document.getElementById('srtInput').addEventListener('change', e => { if (e.target.files[0]) loadSrt(e.target.files[0]); e.target.value = ''; });
 
         function loadVideo(file) {
             if (video.src && video.src.startsWith('blob:')) URL.revokeObjectURL(video.src);
@@ -1219,18 +1230,21 @@
             reader.onload = e => {
                 srtFileName = file.name.replace(/\.srt$/i, '');
                 subs = parseSRT(e.target.result);
+                subs.sort((a, b) => a.start - b.start || a.end - b.end); // 配列順=時刻順を保証
                 document.getElementById('srtFileName').textContent = file.name;
                 document.getElementById('dropSrt').classList.add('loaded');
                 if (subs.length > 0) {
                     renderAll();
                     document.getElementById('exportBtn').disabled = false;
                     updateAutoOffsetInfo();
-                    toast('success', `${subs.length} 件の字幕を読み込みました`);
+                    const ov = countOverlaps();
+                    toast(ov > 0 ? 'error' : 'success', `${subs.length} 件の字幕を読み込みました${ov > 0 ? `（時間が重複した字幕が ${ov} 件・赤色表示）` : ''}`);
                 } else {
                     toast('error', '字幕が見つかりません');
                 }
                 checkOverlay();
             };
+            reader.onerror = () => { toast('error', 'SRTファイルの読み込みに失敗しました'); };
             reader.readAsText(file, enc);
         }
 
@@ -1306,7 +1320,7 @@
             empty.style.display = 'none';
 
             list.innerHTML = subs.map((s, i) => `
-        <div class="sub-row ${i === selectedIdx ? 'active' : ''} ${i === playingIdx ? 'playing' : ''}"
+        <div class="sub-row ${i === selectedIdx ? 'active' : ''} ${i === playingIdx ? 'playing' : ''} ${isOverlap(i) ? 'overlap' : ''}"
              id="row-${i}" onclick="selectRow(${i})" ondblclick="seekTo(${i})">
           <div class="col-idx">${i + 1}</div>
           <div class="col-tc">
@@ -1322,13 +1336,13 @@
               onfocus="this.select(); selectedIdx = ${i};" />
           </div>
           <div class="col-text">
-            <textarea class="${s.text.length > 20 ? 'text-warning' : ''}" rows="${Math.max(1, s.text.split('\n').length)}"
+            <textarea class="${maxLineLen(s.text) > 20 ? 'text-warning' : ''}" rows="${Math.max(1, s.text.split('\n').length)}"
               onclick="event.stopPropagation()"
               onkeydown="handleTextareaKeydown(event, ${i});"
               oninput="handleTextInput(this, ${i});"
               onblur="commitText(${i}, this.value);"
               onfocus="selectedIdx = ${i}; _textBeforeEdit = this.value;">${escAttr(s.text)}</textarea>
-            <div class="char-count ${s.text.length > 20 ? 'warning' : ''}" title="20文字以上は注意">${s.text.length}</div>
+            <div class="char-count ${maxLineLen(s.text) > 20 ? 'warning' : ''}" title="各行20文字を超えると警告">${maxLineLen(s.text)}</div>
           </div>
           <div class="col-actions">
             <button class="act-btn" onclick="event.stopPropagation(); setIn(${i})" title="INを動画位置に (Option + I)">IN⏎</button>
@@ -1346,19 +1360,82 @@
 
         function escAttr(s) { return s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;'); }
 
+        // 複数行字幕の「各行」の最大文字数（README: 各行20文字超えで警告）
+        function maxLineLen(t) { return Math.max(0, ...t.split('\n').map(l => l.length)); }
+
+        // ── 隣接字幕（行の並び順）との時間重複ガード ──
+        // 前の字幕のOUTより前にINを置かない / 次の字幕のINより後にOUTを置かない
+        function clampStart(i, ms) {
+            if (i > 0) ms = Math.max(ms, subs[i - 1].end);
+            return Math.max(0, ms);
+        }
+        function clampEnd(i, ms) {
+            if (i < subs.length - 1) ms = Math.min(ms, subs[i + 1].start);
+            return ms;
+        }
+        // 前後いずれかの字幕と時間が重なっているか
+        function isOverlap(i) {
+            if (i > 0 && subs[i].start < subs[i - 1].end) return true;
+            if (i < subs.length - 1 && subs[i].end > subs[i + 1].start) return true;
+            return false;
+        }
+        function countOverlaps() {
+            let n = 0;
+            for (let i = 0; i < subs.length - 1; i++) if (subs[i].end > subs[i + 1].start) n++;
+            return n;
+        }
+
+        // INを設定（前の字幕を越えない。OUTを越えたら最低500msの余地を作り、余地が無ければOUT直前で止める）
+        // → start < end と 前後非重複を必ず維持する（逆転を起こさない）
+        function setStartClamped(i, ms) {
+            let c = clampStart(i, ms);
+            let clamped = c !== ms;
+            if (c >= subs[i].end) {
+                const newEnd = clampEnd(i, c + 500);
+                if (newEnd > c) subs[i].end = newEnd;
+                else { c = subs[i].end - 1; clamped = true; }
+            }
+            subs[i].start = Math.max(0, c);
+            return clamped;
+        }
+        // OUTを設定（次の字幕を越えない。INを下回ったらINを前へ。余地が無ければIN直後で止める）
+        function setEndClamped(i, ms) {
+            let c = clampEnd(i, ms);
+            let clamped = c !== ms;
+            if (c <= subs[i].start) {
+                const newStart = clampStart(i, c - 500);
+                if (newStart < c) subs[i].start = newStart;
+                else { c = subs[i].start + 1; clamped = true; }
+            }
+            subs[i].end = c;
+            return clamped;
+        }
+
+        // 字幕を開始時刻順に並べ替え（配列順=時刻順を保証し、離れた行どうしの「飛び地」重複を防ぐ）
+        function sortSubsByTime() {
+            const before = subs.map(s => s.start + '/' + s.end).join(',');
+            const sel = selectedIdx >= 0 ? subs[selectedIdx] : null;
+            subs.sort((a, b) => a.start - b.start || a.end - b.end);
+            if (sel) selectedIdx = subs.indexOf(sel);
+            return subs.map(s => s.start + '/' + s.end).join(',') !== before; // 並びが変わったか
+        }
+        // ツールバーボタン用
+        function sortByTimeButton() {
+            if (subs.length < 2) return;
+            pushHistory();
+            const changed = sortSubsByTime();
+            renderAll();
+            toast(changed ? 'success' : 'info', changed ? '時刻順に並べ替えました' : 'すでに時刻順です');
+        }
+
         function selectRow(i) { selectedIdx = i; renderAll(); }
 
         function updateTC(i, field, val) {
             pushHistory();
             const newMs = tcToMs(val);
-            if (field === 'start') {
-                subs[i].start = newMs;
-                if (subs[i].start >= subs[i].end) subs[i].end = subs[i].start + 500; // 逆転防止: 最低500ms確保
-            } else {
-                subs[i].end = newMs;
-                if (subs[i].end <= subs[i].start) subs[i].start = Math.max(0, subs[i].end - 500);
-            }
+            const clamped = field === 'start' ? setStartClamped(i, newMs) : setEndClamped(i, newMs);
             renderAll();
+            if (clamped) toast('info', '前後の字幕と重ならないよう調整しました');
         }
         function updateText(i, val) { pushHistory(); subs[i].text = val; autoSave(); }
 
@@ -1398,7 +1475,7 @@
             subs[i].text = el.value;
             _savedCursor = { idx: i, pos: el.selectionStart };
             el.rows = el.value.split('\n').length || 1;
-            const len = el.value.length;
+            const len = maxLineLen(el.value);
             const countEl = el.nextElementSibling;
             if (countEl && countEl.classList.contains('char-count')) {
                 countEl.textContent = len;
@@ -1530,13 +1607,9 @@
             if (!video.src || video.readyState === 0) { toast('error', '動画を読み込んでください'); return; }
             pushHistory();
             const nowMs = Math.round(video.currentTime * 1000);
-            subs[i].start = nowMs;
-            // OUT点より後ろになったら、OUT点を1秒後にずらす
-            if (subs[i].start >= subs[i].end) {
-                subs[i].end = subs[i].start + 1000;
-            }
+            const clamped = setStartClamped(i, nowMs); // 前後の字幕と重ならないよう調整＋逆転防止
             renderAll();
-            toast('info', 'IN点を設定しました');
+            toast('info', clamped ? 'IN点を設定（前後の字幕に合わせて調整）' : 'IN点を設定しました');
         }
 
         function setOut(i) {
@@ -1546,10 +1619,15 @@
                 toast('error', 'IN点より前には設定できません');
                 return;
             }
+            // 次の字幕の開始位置にすら余地が無い場合は中断（INを動かさず据え置き）
+            if (i < subs.length - 1 && subs[i + 1].start <= subs[i].start) {
+                toast('error', '次の字幕と重なるため設定できません');
+                return;
+            }
             pushHistory();
-            subs[i].end = nowMs;
+            const clamped = setEndClamped(i, nowMs); // 次の字幕と重ならないよう調整
             renderAll();
-            toast('info', 'OUT点を設定しました');
+            toast('info', clamped ? 'OUT点を設定（次の字幕の先端に合わせました）' : 'OUT点を設定しました');
         }
 
         function addSubtitle() {
@@ -1768,6 +1846,13 @@
             document.getElementById('totTime').textContent = secToTC(video.duration);
         });
 
+        video.addEventListener('error', () => {
+            // src未設定や読み込み前の空エラーは無視し、実ファイル読み込み失敗のみ通知
+            if (video.src && video.src.startsWith('blob:') && video.error) {
+                toast('error', '動画の読み込みに失敗しました（非対応の形式の可能性）');
+            }
+        });
+
         document.getElementById('progressBar').addEventListener('click', e => {
             const rect = e.currentTarget.getBoundingClientRect();
             video.currentTime = ((e.clientX - rect.left) / rect.width) * (video.duration || 0);
@@ -1901,6 +1986,8 @@
 
         async function exportFCPXML() {
             if (subs.length === 0) return;
+            // 書き出し直前に時刻順へ整列（手編集で順序が崩れていても出力は必ず時刻昇順）
+            if (sortSubsByTime()) { renderAll(); toast('info', '時刻順に整列してから書き出します'); }
             const fpsVal = document.getElementById('fps').value;
             const [fpsNum, fpsDen] = fpsVal.split('/').map(Number);
             const frameOffset = parseInt(document.getElementById('frameOffset').value || '0');
@@ -1914,6 +2001,7 @@
 
 
             const adj = subs.map(s => ({ start: Math.max(0, s.start - autoOffset + offsetMs), end: Math.max(0, s.end - autoOffset + offsetMs), text: s.text })).filter(s => s.end > s.start);
+            if (adj.length === 0) { toast('error', '書き出せる字幕がありません（長さが0、またはオフセットで範囲外になりました）'); return; }
             const totalMs = Math.max(...adj.map(s => s.end)) + 2000;
             const totalTime = msToFCPTime(totalMs, fpsNum, fpsDen);
             const isDF = (fpsNum === 30000 && fpsDen === 1001) || (fpsNum === 60000 && fpsDen === 1001);
@@ -2070,6 +2158,8 @@ ${clips}
             if (subs.length > 0) {
                 renderAll();
                 document.getElementById('exportBtn').disabled = false;
+                const ov = countOverlaps();
+                if (ov > 0) toast('error', `復元しました（時間が重複した字幕が ${ov} 件・赤色表示）`);
             }
         }
 
@@ -2095,10 +2185,14 @@ ${clips}
             }
             // Fallback for older browsers
             const a = document.createElement('a');
-            a.href = URL.createObjectURL(blob);
+            const url = URL.createObjectURL(blob);
+            a.href = url;
             a.download = defaultName;
+            document.body.appendChild(a); // Firefox は DOM に存在しないと click が無効
             a.click();
-            URL.revokeObjectURL(a.href);
+            document.body.removeChild(a);
+            // 即時 revoke すると一部ブラウザでDLが中断されるため遅延解放
+            setTimeout(() => URL.revokeObjectURL(url), 1000);
             return true;
         }
 
@@ -2184,6 +2278,10 @@ ${clips}
                     ctx.font = '11px sans-serif';
                     ctx.fillText('音声の解析に失敗しました（動画が長い・非対応フォーマットなどの理由）', 10, 20);
                 }
+            };
+            reader.onerror = () => {
+                loading.classList.remove('show');
+                toast('error', '音声データの読み込みに失敗しました');
             };
             reader.readAsArrayBuffer(file);
         }
@@ -2336,10 +2434,13 @@ ${clips}
                 if (newMs < 0) newMs = 0;
 
                 const s = subs[dragInfo.idx];
+                const i = dragInfo.idx;
                 if (dragInfo.type === 'in') {
+                    if (i > 0 && newMs < subs[i - 1].end) newMs = subs[i - 1].end; // 前の字幕と重ならない
                     if (newMs >= s.end) newMs = s.end - 1; // Prevent crossing OUT
                     s.start = newMs;
                 } else if (dragInfo.type === 'out') {
+                    if (i < subs.length - 1 && newMs > subs[i + 1].start) newMs = subs[i + 1].start; // 次の字幕と重ならない
                     if (newMs <= s.start) newMs = s.start + 1; // Prevent crossing IN
                     s.end = newMs;
                 }
