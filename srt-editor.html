@@ -1231,6 +1231,7 @@
                 srtFileName = file.name.replace(/\.srt$/i, '');
                 subs = parseSRT(e.target.result);
                 subs.sort((a, b) => a.start - b.start || a.end - b.end); // 配列順=時刻順を保証
+                selectedIdx = -1; // 前のファイルの選択位置が新リストの範囲外になるのを防ぐ
                 document.getElementById('srtFileName').textContent = file.name;
                 document.getElementById('dropSrt').classList.add('loaded');
                 if (subs.length > 0) {
@@ -1431,6 +1432,11 @@
         function selectRow(i) { selectedIdx = i; renderAll(); }
 
         function updateTC(i, field, val) {
+            if (!/^\s*\d+:\d+:\d+[,.]\d+\s*$/.test(val)) {
+                renderAll(); // 入力欄を元の値に戻す
+                toast('error', 'タイムコードの形式が不正です（例: 00:01:23,456）');
+                return;
+            }
             pushHistory();
             const newMs = tcToMs(val);
             const clamped = field === 'start' ? setStartClamped(i, newMs) : setEndClamped(i, newMs);
@@ -1492,6 +1498,9 @@
         // onblur: フォーカスアウト時にhistoryへ記録してautosave
         function commitText(i, val) {
             if (val !== _textBeforeEdit) {
+                // oninputで既にsubs[i].textが書き換わっているため、
+                // undo用スナップショットは編集前のテキストに戻してから取る
+                subs[i].text = _textBeforeEdit;
                 pushHistory();
                 subs[i].text = val;
                 autoSave();
@@ -1508,6 +1517,7 @@
         function undo() {
             if (historyStack.length === 0) { toast('info', 'これ以上戻れません'); return; }
             subs = JSON.parse(historyStack.pop());
+            if (selectedIdx >= subs.length) selectedIdx = subs.length - 1; // 件数減少時の範囲外参照を防ぐ
             renderAll();
             // Undo後に字幕が0件になった場合は書き出しボタンを無効化
             document.getElementById('exportBtn').disabled = subs.length === 0;
@@ -1530,6 +1540,7 @@
             // 結合時にセパレータを挿入（英語はスペース、日本語は改行で自然に）
             subs[i].text = subs[i].text + '\n' + subs[i + 1].text;
             subs.splice(i + 1, 1);
+            if (selectedIdx >= subs.length) selectedIdx = subs.length - 1;
             renderAll();
             toast('success', '結合しました');
         }
@@ -1597,7 +1608,7 @@
             subs.splice(i + 1, 0, newSub);
 
             // 分割後に時間順を再整理し、一覧表の交差・前後関係の狂いを根本から防ぐ
-            subs.sort((a, b) => a.start - b.start);
+            sortSubsByTime();
             
             renderAll();
             toast('success', '動画位置で分割しました');
@@ -1870,7 +1881,7 @@
         // ═══ KEYBOARD ═══
         document.addEventListener('keydown', e => {
             // Option / Alt + Key shortcuts ( works even while typing in input fields! )
-            if (e.altKey && selectedIdx >= 0) {
+            if (e.altKey && selectedIdx >= 0 && selectedIdx < subs.length) {
                 if (e.code === 'KeyC') { e.preventDefault(); splitRow(selectedIdx); return; }
                 if (e.code === 'KeyV') { e.preventDefault(); mergeRow(selectedIdx); return; }
                 if (e.code === 'KeyI') { e.preventDefault(); setIn(selectedIdx); return; }
@@ -1894,8 +1905,8 @@
             if (e.key === 'ArrowRight') { e.preventDefault(); seekRel(e.shiftKey ? 5 : 1); }
             if (e.key === 'ArrowUp' && selectedIdx > 0) { e.preventDefault(); selectRow(selectedIdx - 1); scrollToRow(selectedIdx - 1); }
             if (e.key === 'ArrowDown' && selectedIdx < subs.length - 1) { e.preventDefault(); selectRow(selectedIdx + 1); scrollToRow(selectedIdx + 1); }
-            if (e.key === 'Delete' && selectedIdx >= 0) { e.preventDefault(); deleteRow(selectedIdx); }
-            if (e.key === 'Enter' && selectedIdx >= 0) { e.preventDefault(); seekTo(selectedIdx); }
+            if (e.key === 'Delete' && selectedIdx >= 0 && selectedIdx < subs.length) { e.preventDefault(); deleteRow(selectedIdx); }
+            if (e.key === 'Enter' && selectedIdx >= 0 && selectedIdx < subs.length) { e.preventDefault(); seekTo(selectedIdx); }
             if (e.code === 'KeyJ') { e.preventDefault(); jklJ(); }  // J: 逆再生
             if (e.code === 'KeyK') { e.preventDefault(); jklK(); }  // K: 停止
             if (e.code === 'KeyL') { e.preventDefault(); jklL(); }  // L: 再生（押すたびに速度アップ）
@@ -2000,7 +2011,16 @@
             const autoOffset = (autoOffsetEnabled && subs.length > 0) ? subs[0].start : 0;
 
 
-            const adj = subs.map(s => ({ start: Math.max(0, s.start - autoOffset + offsetMs), end: Math.max(0, s.end - autoOffset + offsetMs), text: s.text })).filter(s => s.end > s.start);
+            // マイナスオフセットで0未満になった字幕を各々0へクランプすると
+            // 複数の字幕が0msに張り付いて時間が重複（IN/OUT交差）するため、
+            // 前の字幕の終端を下限にして順に詰める。長さが無くなった字幕は除外。
+            const adj = [];
+            let prevEnd = 0;
+            for (const s of subs) {
+                const start = Math.max(s.start - autoOffset + offsetMs, prevEnd, 0);
+                const end = Math.max(s.end - autoOffset + offsetMs, 0);
+                if (end > start) { adj.push({ start, end, text: s.text }); prevEnd = end; }
+            }
             if (adj.length === 0) { toast('error', '書き出せる字幕がありません（長さが0、またはオフセットで範囲外になりました）'); return; }
             const totalMs = Math.max(...adj.map(s => s.end)) + 2000;
             const totalTime = msToFCPTime(totalMs, fpsNum, fpsDen);
@@ -2137,6 +2157,8 @@ ${clips}
 
         function restoreData(data) {
             subs = data.subs || [];
+            subs.sort((a, b) => a.start - b.start || a.end - b.end); // 配列順=時刻順を保証（読込時と同様）
+            selectedIdx = -1;
             srtFileName = data.srtFileName || '';
             videoFileName = data.videoFileName || '';
             if (data.settings) {
@@ -2199,6 +2221,7 @@ ${clips}
         // ═══ SRT EXPORT ═══
         async function exportSRT() {
             if (subs.length === 0) { toast('error', '保存する字幕がありません'); return; }
+            if (sortSubsByTime()) renderAll(); // 出力は必ず時刻昇順（FCPXML書き出しと同じ扱い）
             let srtContent = '';
             for (let i = 0; i < subs.length; i++) {
                 const s = subs[i];
@@ -2216,6 +2239,7 @@ ${clips}
 
         async function exportVTT() {
             if (subs.length === 0) { toast('error', '保存する字幕がありません'); return; }
+            if (sortSubsByTime()) renderAll(); // 出力は必ず時刻昇順（FCPXML書き出しと同じ扱い）
             let vttContent = 'WEBVTT\n\n';
 
             const msToVttTc = (ms) => {
@@ -2419,6 +2443,25 @@ ${clips}
         // ── Drag and Drop Logic ──
         let dragInfo = null;
 
+        // 指定位置に最も近いIN/OUTエッジを探す。
+        // 前のOUTと次のINが同時刻で接している境界では、クリックが境界の右なら右の字幕のIN、
+        // 左なら左の字幕のOUTを優先する（接した字幕のINが掴めなくなるのを防ぐ）。
+        function findEdgeAt(ms, tol) {
+            let best = null;
+            for (let i = 0; i < subs.length; i++) {
+                for (const e of [{ type: 'in', v: subs[i].start }, { type: 'out', v: subs[i].end }]) {
+                    const d = Math.abs(e.v - ms);
+                    if (d >= tol) continue;
+                    // エッジから見て字幕本体側にクリックがあるか（in→右側が本体 / out→左側が本体）
+                    const towardBody = e.type === 'in' ? ms >= e.v : ms <= e.v;
+                    if (!best || d < best.d || (d === best.d && towardBody && !best.towardBody)) {
+                        best = { idx: i, type: e.type, d, towardBody };
+                    }
+                }
+            }
+            return best;
+        }
+
         document.getElementById('waveformCanvas')?.addEventListener('mousemove', e => {
             if (!audioBuffer) return;
             const canvas = document.getElementById('waveformCanvas');
@@ -2460,19 +2503,8 @@ ${clips}
             }
 
             // Not dragging, check hover for cursor
-            let cursor = 'pointer';
-            for (let i = 0; i < subs.length; i++) {
-                const s = subs[i];
-                if (Math.abs(s.start - hoverMs) < hoverToleranceMs) {
-                    cursor = 'w-resize';
-                    break;
-                }
-                if (Math.abs(s.end - hoverMs) < hoverToleranceMs) {
-                    cursor = 'e-resize';
-                    break;
-                }
-            }
-            canvas.style.cursor = cursor;
+            const hover = findEdgeAt(hoverMs, hoverToleranceMs);
+            canvas.style.cursor = hover ? (hover.type === 'in' ? 'w-resize' : 'e-resize') : 'pointer';
         });
 
         document.getElementById('waveformCanvas')?.addEventListener('mousedown', e => {
@@ -2483,26 +2515,12 @@ ${clips}
             const clickMs = (x / zoomLevel) * 1000;
             const hoverToleranceMs = (10 / zoomLevel) * 1000;
 
-            let clickedEdge = false;
-            for (let i = 0; i < subs.length; i++) {
-                const s = subs[i];
-                if (Math.abs(s.start - clickMs) < hoverToleranceMs) {
-                    pushHistory();
-                    dragInfo = { idx: i, type: 'in' };
-                    clickedEdge = true;
-                    e.preventDefault();
-                    break;
-                }
-                if (Math.abs(s.end - clickMs) < hoverToleranceMs) {
-                    pushHistory();
-                    dragInfo = { idx: i, type: 'out' };
-                    clickedEdge = true;
-                    e.preventDefault();
-                    break;
-                }
-            }
-
-            if (!clickedEdge) {
+            const hit = findEdgeAt(clickMs, hoverToleranceMs);
+            if (hit) {
+                pushHistory();
+                dragInfo = { idx: hit.idx, type: hit.type };
+                e.preventDefault();
+            } else {
                 // Normal click seek
                 video.currentTime = Math.max(0, x / zoomLevel);
                 updateWaveformPlayhead();
