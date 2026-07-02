@@ -1230,17 +1230,19 @@
             reader.onload = e => {
                 srtFileName = file.name.replace(/\.srt$/i, '');
                 subs = parseSRT(e.target.result);
-                subs.sort((a, b) => a.start - b.start || a.end - b.end); // 配列順=時刻順を保証
                 selectedIdx = -1; // 前のファイルの選択位置が新リストの範囲外になるのを防ぐ
+                sortSubsByTime(); // 配列順=時刻順を保証
+                historyStack = []; // 前のファイルのUndo履歴を持ち越さない（Cmd+Zで別ファイルの字幕が復活するのを防ぐ）
                 document.getElementById('srtFileName').textContent = file.name;
                 document.getElementById('dropSrt').classList.add('loaded');
                 if (subs.length > 0) {
                     renderAll();
                     document.getElementById('exportBtn').disabled = false;
-                    updateAutoOffsetInfo();
                     const ov = countOverlaps();
                     toast(ov > 0 ? 'error' : 'success', `${subs.length} 件の字幕を読み込みました${ov > 0 ? `（時間が重複した字幕が ${ov} 件・赤色表示）` : ''}`);
                 } else {
+                    renderAll(); // 前のファイルの行を画面に残さない（subsは空なので空表示になる）
+                    document.getElementById('exportBtn').disabled = true;
                     toast('error', '字幕が見つかりません');
                 }
                 checkOverlay();
@@ -1257,7 +1259,7 @@
         // ═══ SRT PARSER ═══
         function tcToMs(tc) {
             const m = tc.trim().match(/(\d+):(\d+):(\d+)[,.](\d+)/);
-            if (!m) return 0;
+            if (!m) return NaN; // 形式エラーは0と区別できるようNaNで返す（NaN比較は常にfalseなのでparseSRTの範囲チェックが自動的に弾く）
             return (+m[1]) * 3600000 + (+m[2]) * 60000 + (+m[3]) * 1000 + +m[4].padEnd(3, '0').slice(0, 3);
         }
 
@@ -1309,6 +1311,11 @@
         }
 
         function renderAll() {
+            // 中央ガード: subsの縮小・入替後に残る範囲外インデックスをここで一括修復（全変更経路がrenderAllを通る）
+            if (selectedIdx >= subs.length) selectedIdx = subs.length - 1;
+            if (playingIdx >= subs.length) playingIdx = -1;
+            _savedCursor = { idx: -1, pos: -1 }; // 再描画でカーソル保存先のtextareaは作り直されるため無効化
+            updateAutoOffsetInfo();
             const list = document.getElementById('subList');
             const empty = document.getElementById('emptyEditor');
             document.getElementById('subCount').textContent = subs.length;
@@ -1327,13 +1334,13 @@
           <div class="col-tc">
             <input type="text" value="${msToTC(s.start)}"
               onclick="event.stopPropagation()"
-              onchange="updateTC(${i},'start',this.value)"
+              onchange="updateTC(${i},'start',this)"
               onfocus="this.select(); selectedIdx = ${i};" />
           </div>
           <div class="col-tc">
             <input type="text" value="${msToTC(s.end)}"
               onclick="event.stopPropagation()"
-              onchange="updateTC(${i},'end',this.value)"
+              onchange="updateTC(${i},'end',this)"
               onfocus="this.select(); selectedIdx = ${i};" />
           </div>
           <div class="col-text">
@@ -1429,16 +1436,28 @@
             toast(changed ? 'success' : 'info', changed ? '時刻順に並べ替えました' : 'すでに時刻順です');
         }
 
+        // 書き出し前の整列: 並びが変わる場合のみUndo可能な形で時刻昇順に揃える（FCPXML/SRT/VTTで共通）
+        function ensureSortedForExport() {
+            const unsorted = subs.some((s, i) => i > 0 && (subs[i - 1].start > s.start || (subs[i - 1].start === s.start && subs[i - 1].end > s.end)));
+            if (!unsorted) return;
+            pushHistory();
+            sortSubsByTime();
+            renderAll();
+            toast('info', '時刻順に整列してから書き出します');
+        }
+
         function selectRow(i) { selectedIdx = i; renderAll(); }
 
-        function updateTC(i, field, val) {
-            if (!/^\s*\d+:\d+:\d+[,.]\d+\s*$/.test(val)) {
-                renderAll(); // 入力欄を元の値に戻す
+        function updateTC(i, field, el) {
+            const newMs = tcToMs(el.value); // 形式判定はtcToMsに一元化（不一致はNaN）
+            if (!Number.isFinite(newMs)) {
+                // renderAll()で全再構築するとフォーカスがbodyへ落ち、続く打鍵がグローバルショートカット
+                // （Delete=行削除など）として発火するため、入力欄だけを元の値に戻す
+                el.value = msToTC(subs[i][field]);
                 toast('error', 'タイムコードの形式が不正です（例: 00:01:23,456）');
                 return;
             }
             pushHistory();
-            const newMs = tcToMs(val);
             const clamped = field === 'start' ? setStartClamped(i, newMs) : setEndClamped(i, newMs);
             renderAll();
             if (clamped) toast('info', '前後の字幕と重ならないよう調整しました');
@@ -1450,7 +1469,8 @@
 
         // Tabキーで次の字幕に移動 / Enterでblur
         function handleTextareaKeydown(e, i) {
-            if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
+            if (e.isComposing) return; // IME変換中のEnter/Tabは変換操作（確定・候補選択）なので乗っ取らない
+            if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
                 e.target.blur();
                 return;
@@ -1503,6 +1523,7 @@
                 subs[i].text = _textBeforeEdit;
                 pushHistory();
                 subs[i].text = val;
+                _textBeforeEdit = val; // 同一編集で二重に呼ばれても二重コミットしない（冪等化）
                 autoSave();
             }
         }
@@ -1517,8 +1538,7 @@
         function undo() {
             if (historyStack.length === 0) { toast('info', 'これ以上戻れません'); return; }
             subs = JSON.parse(historyStack.pop());
-            if (selectedIdx >= subs.length) selectedIdx = subs.length - 1; // 件数減少時の範囲外参照を防ぐ
-            renderAll();
+            renderAll(); // 件数減少時の範囲外インデックスはrenderAll冒頭の中央ガードが修復する
             // Undo後に字幕が0件になった場合は書き出しボタンを無効化
             document.getElementById('exportBtn').disabled = subs.length === 0;
             toast('info', '元に戻しました');
@@ -1528,7 +1548,7 @@
         function deleteRow(i) {
             pushHistory();
             subs.splice(i, 1);
-            if (selectedIdx >= subs.length) selectedIdx = subs.length - 1;
+            if (selectedIdx > i) selectedIdx--; // 選択より上の行を消したら選択が同じ字幕を指し続けるよう追従
             renderAll();
             toast('success', '削除しました');
         }
@@ -1540,7 +1560,7 @@
             // 結合時にセパレータを挿入（英語はスペース、日本語は改行で自然に）
             subs[i].text = subs[i].text + '\n' + subs[i + 1].text;
             subs.splice(i + 1, 1);
-            if (selectedIdx >= subs.length) selectedIdx = subs.length - 1;
+            if (selectedIdx > i) selectedIdx--; // 選択より上で結合したら選択を同じ字幕に追従（結合された行の選択は結合先iへ）
             renderAll();
             toast('success', '結合しました');
         }
@@ -1881,11 +1901,18 @@
         // ═══ KEYBOARD ═══
         document.addEventListener('keydown', e => {
             // Option / Alt + Key shortcuts ( works even while typing in input fields! )
-            if (e.altKey && selectedIdx >= 0 && selectedIdx < subs.length) {
-                if (e.code === 'KeyC') { e.preventDefault(); splitRow(selectedIdx); return; }
-                if (e.code === 'KeyV') { e.preventDefault(); mergeRow(selectedIdx); return; }
-                if (e.code === 'KeyI') { e.preventDefault(); setIn(selectedIdx); return; }
-                if (e.code === 'KeyO') { e.preventDefault(); setOut(selectedIdx); return; }
+            // meta/ctrl併用時は除外（Cmd+Option+I=DevTools等のブラウザショートカットを乗っ取らない）
+            if (e.altKey && !e.metaKey && !e.ctrlKey && selectedIdx >= 0 && selectedIdx < subs.length
+                && (e.code === 'KeyC' || e.code === 'KeyV' || e.code === 'KeyI' || e.code === 'KeyO')) {
+                e.preventDefault();
+                // テキスト編集中なら先にblurで確定させる（編集途中のテキストがpushHistoryの履歴に焼き込まれ、
+                // テキスト編集がUndo不能になるのを防ぐ）
+                if (document.activeElement && document.activeElement.tagName === 'TEXTAREA') document.activeElement.blur();
+                if (e.code === 'KeyC') splitRow(selectedIdx);
+                else if (e.code === 'KeyV') mergeRow(selectedIdx);
+                else if (e.code === 'KeyI') setIn(selectedIdx);
+                else if (e.code === 'KeyO') setOut(selectedIdx);
+                return;
             }
 
             // Undo (Cmd+Z / Ctrl+Z)
@@ -1899,6 +1926,9 @@
 
             // Ignore other single-key commands if typing in an input
             if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') return;
+
+            // 修飾キー付きはブラウザのショートカット（Ctrl+J=ダウンロード、Cmd+K等）なので乗っ取らない
+            if (e.metaKey || e.ctrlKey || e.altKey) return;
 
             if (e.key === ' ') { e.preventDefault(); togglePlay(); }
             if (e.key === 'ArrowLeft') { e.preventDefault(); seekRel(e.shiftKey ? -5 : -1); }
@@ -1998,7 +2028,7 @@
         async function exportFCPXML() {
             if (subs.length === 0) return;
             // 書き出し直前に時刻順へ整列（手編集で順序が崩れていても出力は必ず時刻昇順）
-            if (sortSubsByTime()) { renderAll(); toast('info', '時刻順に整列してから書き出します'); }
+            ensureSortedForExport();
             const fpsVal = document.getElementById('fps').value;
             const [fpsNum, fpsDen] = fpsVal.split('/').map(Number);
             const frameOffset = parseInt(document.getElementById('frameOffset').value || '0');
@@ -2013,16 +2043,24 @@
 
             // マイナスオフセットで0未満になった字幕を各々0へクランプすると
             // 複数の字幕が0msに張り付いて時間が重複（IN/OUT交差）するため、
-            // 前の字幕の終端を下限にして順に詰める。長さが無くなった字幕は除外。
+            // 前の字幕の終端を下限にして順に詰める（FCPXMLは同一レーンの重複を許さない）。
+            // 前詰め・除外が発生した場合は件数をトーストで通知する（無言のデータ欠落を防ぐ）。
             const adj = [];
-            let prevEnd = 0;
+            let prevEnd = 0, dropped = 0, shifted = 0;
             for (const s of subs) {
-                const start = Math.max(s.start - autoOffset + offsetMs, prevEnd, 0);
-                const end = Math.max(s.end - autoOffset + offsetMs, 0);
-                if (end > start) { adj.push({ start, end, text: s.text }); prevEnd = end; }
+                const rawStart = s.start - autoOffset + offsetMs;
+                const start = Math.max(rawStart, prevEnd); // prevEndの初期値0が0クランプを兼ねる
+                const end = s.end - autoOffset + offsetMs;
+                if (end > start) {
+                    if (start !== rawStart) shifted++;
+                    adj.push({ start, end, text: s.text });
+                    prevEnd = end;
+                } else {
+                    dropped++; // 長さ消失、または前の字幕の範囲に完全に含まれる重複
+                }
             }
             if (adj.length === 0) { toast('error', '書き出せる字幕がありません（長さが0、またはオフセットで範囲外になりました）'); return; }
-            const totalMs = Math.max(...adj.map(s => s.end)) + 2000;
+            const totalMs = prevEnd + 2000; // 順次詰めにより最後に採用したend===最大end
             const totalTime = msToFCPTime(totalMs, fpsNum, fpsDen);
             const isDF = (fpsNum === 30000 && fpsDen === 1001) || (fpsNum === 60000 && fpsDen === 1001);
             const fpsMap = { '24000/1001': '2398', '24/1': '24', '25/1': '25', '30000/1001': '2997', '30/1': '30', '60000/1001': '5994', '60/1': '60' };
@@ -2065,8 +2103,10 @@ ${clips}
                 const parts = [];
                 if (autoOffset > 0) parts.push(`話出し調整: -${autoOffset}ms`);
                 if (frameOffset !== 0) parts.push(`フレーム調整: ${offsetMs > 0 ? '+' : ''}${offsetMs}ms`);
+                if (shifted > 0) parts.push(`重複回避のためIN前詰め: ${shifted}件`);
+                if (dropped > 0) parts.push(`重複・長さ0で除外: ${dropped}件`);
                 const detail = parts.length > 0 ? ` (${parts.join(', ')})` : '';
-                toast('success', `✓ ${adj.length} 件をFCPXMLに書き出しました${detail}`);
+                toast(dropped > 0 ? 'error' : 'success', `✓ ${adj.length} 件をFCPXMLに書き出しました${detail}`);
             }
         }
 
@@ -2157,10 +2197,19 @@ ${clips}
 
         function restoreData(data) {
             subs = data.subs || [];
-            subs.sort((a, b) => a.start - b.start || a.end - b.end); // 配列順=時刻順を保証（読込時と同様）
             selectedIdx = -1;
+            sortSubsByTime(); // 配列順=時刻順を保証（読込時と同様）
+            historyStack = []; // 復元前のUndo履歴を持ち越さない
             srtFileName = data.srtFileName || '';
             videoFileName = data.videoFileName || '';
+            // ドロップ欄の表示も復元と整合させる（字幕データは復元済み。動画ファイル自体は再ドロップが必要）
+            if (srtFileName) {
+                document.getElementById('srtFileName').textContent = srtFileName + '.srt（復元）';
+                document.getElementById('dropSrt').classList.add('loaded');
+            }
+            if (videoFileName) {
+                document.getElementById('videoFileName').textContent = videoFileName + '（再ドロップで読込）';
+            }
             if (data.settings) {
                 if (data.settings.fps) document.getElementById('fps').value = data.settings.fps;
                 if (data.settings.resolution) document.getElementById('resolution').value = data.settings.resolution;
@@ -2221,7 +2270,7 @@ ${clips}
         // ═══ SRT EXPORT ═══
         async function exportSRT() {
             if (subs.length === 0) { toast('error', '保存する字幕がありません'); return; }
-            if (sortSubsByTime()) renderAll(); // 出力は必ず時刻昇順（FCPXML書き出しと同じ扱い）
+            ensureSortedForExport(); // 出力は必ず時刻昇順（FCPXML書き出しと同じ扱い）
             let srtContent = '';
             for (let i = 0; i < subs.length; i++) {
                 const s = subs[i];
@@ -2239,7 +2288,7 @@ ${clips}
 
         async function exportVTT() {
             if (subs.length === 0) { toast('error', '保存する字幕がありません'); return; }
-            if (sortSubsByTime()) renderAll(); // 出力は必ず時刻昇順（FCPXML書き出しと同じ扱い）
+            ensureSortedForExport(); // 出力は必ず時刻昇順（FCPXML書き出しと同じ扱い）
             let vttContent = 'WEBVTT\n\n';
 
             const msToVttTc = (ms) => {
@@ -2443,23 +2492,33 @@ ${clips}
         // ── Drag and Drop Logic ──
         let dragInfo = null;
 
-        // 指定位置に最も近いIN/OUTエッジを探す。
-        // 前のOUTと次のINが同時刻で接している境界では、クリックが境界の右なら右の字幕のIN、
+        // 指定位置に最も近いIN/OUTエッジを探す（掴み許容幅=10px相当はここで一元管理）。
+        // 前のOUTと次のINが同時刻で接している境界では、クリックが境界の右または真上なら右の字幕のIN、
         // 左なら左の字幕のOUTを優先する（接した字幕のINが掴めなくなるのを防ぐ）。
-        function findEdgeAt(ms, tol) {
-            let best = null;
+        // mousemove毎に呼ばれるホットパスなのでオブジェクトを割り当てず、時刻順ソートを利用して早期打ち切りする。
+        function findEdgeAt(ms) {
+            const tol = (10 / zoomLevel) * 1000; // 10ピクセル相当
+            let bestIdx = -1, bestType = null, bestD = Infinity, bestToward = false;
             for (let i = 0; i < subs.length; i++) {
-                for (const e of [{ type: 'in', v: subs[i].start }, { type: 'out', v: subs[i].end }]) {
-                    const d = Math.abs(e.v - ms);
-                    if (d >= tol) continue;
-                    // エッジから見て字幕本体側にクリックがあるか（in→右側が本体 / out→左側が本体）
-                    const towardBody = e.type === 'in' ? ms >= e.v : ms <= e.v;
-                    if (!best || d < best.d || (d === best.d && towardBody && !best.towardBody)) {
-                        best = { idx: i, type: e.type, d, towardBody };
+                const s = subs[i];
+                if (s.start > ms + tol) break; // 時刻順ソート済み: 以降の字幕のエッジはすべて許容幅の外
+                // エッジから見て字幕本体側にクリックがあるか（in→右側が本体 / out→左側が本体）
+                const dIn = Math.abs(s.start - ms);
+                if (dIn < tol) {
+                    const toward = ms >= s.start;
+                    if (dIn < bestD || (dIn === bestD && toward && !bestToward)) {
+                        bestIdx = i; bestType = 'in'; bestD = dIn; bestToward = toward;
+                    }
+                }
+                const dOut = Math.abs(s.end - ms);
+                if (dOut < tol) {
+                    const toward = ms < s.end; // 境界ちょうど（ms===end===次のstart）は右の字幕のINに譲る
+                    if (dOut < bestD || (dOut === bestD && toward && !bestToward)) {
+                        bestIdx = i; bestType = 'out'; bestD = dOut; bestToward = toward;
                     }
                 }
             }
-            return best;
+            return bestIdx >= 0 ? { idx: bestIdx, type: bestType } : null;
         }
 
         document.getElementById('waveformCanvas')?.addEventListener('mousemove', e => {
@@ -2468,7 +2527,6 @@ ${clips}
             const rect = canvas.getBoundingClientRect();
             const x = e.clientX - rect.left;
             const hoverMs = (x / zoomLevel) * 1000;
-            const hoverToleranceMs = (10 / zoomLevel) * 1000; // 10 pixels tolerance
 
             if (dragInfo) {
                 // Currently dragging
@@ -2477,6 +2535,7 @@ ${clips}
                 if (newMs < 0) newMs = 0;
 
                 const s = subs[dragInfo.idx];
+                if (!s) { dragInfo = null; return; } // ドラッグ中にDelete/Undo等でsubsが変異した場合の防御
                 const i = dragInfo.idx;
                 if (dragInfo.type === 'in') {
                     if (i > 0 && newMs < subs[i - 1].end) newMs = subs[i - 1].end; // 前の字幕と重ならない
@@ -2503,7 +2562,7 @@ ${clips}
             }
 
             // Not dragging, check hover for cursor
-            const hover = findEdgeAt(hoverMs, hoverToleranceMs);
+            const hover = findEdgeAt(hoverMs);
             canvas.style.cursor = hover ? (hover.type === 'in' ? 'w-resize' : 'e-resize') : 'pointer';
         });
 
@@ -2513,9 +2572,8 @@ ${clips}
             const rect = canvas.getBoundingClientRect();
             const x = e.clientX - rect.left;
             const clickMs = (x / zoomLevel) * 1000;
-            const hoverToleranceMs = (10 / zoomLevel) * 1000;
 
-            const hit = findEdgeAt(clickMs, hoverToleranceMs);
+            const hit = findEdgeAt(clickMs);
             if (hit) {
                 pushHistory();
                 dragInfo = { idx: hit.idx, type: hit.type };
