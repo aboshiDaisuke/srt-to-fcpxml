@@ -419,22 +419,28 @@
             overflow-x: auto;
             overflow-y: hidden;
             scrollbar-width: none;
-            display: flex;
-            align-items: center;
+            cursor: pointer;
         }
 
         .waveform-scroll::-webkit-scrollbar {
             display: none;
         }
 
-        .wave-spacer {
-            flex-shrink: 0;
+        /* スクロール量を作るためだけの空要素。実際の描画は下のCanvasが担当する */
+        .wave-content {
+            height: 100%;
         }
 
-        .waveform-scroll canvas {
-            display: block;
+        /* 波形Canvasはスクロールせず、常にコンテナと同じ大きさで重なる。
+           見えている範囲だけを描くのでブラウザのCanvas最大サイズ制限に掛からない。
+           マウス操作は下の .waveform-scroll に通す */
+        #waveformCanvas {
+            position: absolute;
+            inset: 0;
+            width: 100%;
             height: 100%;
-            cursor: pointer;
+            display: block;
+            pointer-events: none;
         }
 
         .waveform-playhead {
@@ -1016,6 +1022,19 @@
             </div>
         </div>
         <div class="field">
+            <label>波形オフセット（ms）</label>
+            <div style="display:flex; align-items:center; gap:6px;">
+                <button class="tb-btn small" onclick="nudgeWaveOffset(-10)" title="波形を10ms早める">◀</button>
+                <input type="number" id="waveOffset" value="0" step="1" onchange="applyWaveOffset()"
+                    style="width:auto; flex:1; text-align:center;">
+                <button class="tb-btn small" onclick="nudgeWaveOffset(10)" title="波形を10ms遅らせる">▶</button>
+            </div>
+            <div id="waveSyncInfo" style="font-size:9px; color:var(--text-dim); margin-top:6px; line-height:1.3;"></div>
+            <div style="font-size:9px; color:var(--text-dim); margin-top:4px; line-height:1.3;">
+                MP4/AACはエンコーダ遅延（priming）の扱いが再生（<code>&lt;video&gt;</code>）と解析（<code>decodeAudioData</code>）で異なる場合があり、<strong>波形だけ</strong>が数十msずれることがあります。実際に聞こえる音と波形の位置が合わないときにここで補正してください（字幕の時刻や書き出し結果には影響しません）。
+            </div>
+        </div>
+        <div class="field">
             <label>解像度</label>
             <div class="select-wrap">
                 <select id="resolution">
@@ -1150,10 +1169,9 @@
             </div>
             <div class="waveform-playhead" id="waveformPlayhead"></div>
             <div class="waveform-scroll" id="waveformScroll">
-                <div class="wave-spacer" id="waveSpacerLeft"></div>
-                <canvas id="waveformCanvas"></canvas>
-                <div class="wave-spacer" id="waveSpacerRight"></div>
+                <div class="wave-content" id="waveContent"></div>
             </div>
+            <canvas id="waveformCanvas"></canvas>
             <div class="waveform-controls">
                 <button class="tb-btn small" onclick="zoomWave(1.2)" title="横に拡大">↔＋</button>
                 <button class="tb-btn small" onclick="zoomWave(0.8)" title="横に縮小">↔ー</button>
@@ -2005,6 +2023,9 @@
 
         video.addEventListener('loadedmetadata', () => {
             document.getElementById('totTime').textContent = secToTC(video.duration);
+            // 音声の解析が先に終わっている場合もあるので、動画長が確定した時点で両方を突き合わせ直す
+            if (typeof updateWaveSyncInfo === 'function') updateWaveSyncInfo();
+            if (typeof drawWaveform === 'function' && audioBuffer) drawWaveform();
         });
 
         video.addEventListener('error', () => {
@@ -2319,7 +2340,8 @@ ${clips}
                         layout: currentLayout,
                         removePunctuation: document.getElementById('removePunctuation').checked,
                         autoOffsetEnabled: document.getElementById('autoOffsetEnabled').checked,
-                        frameModeEnabled: frameMode
+                        frameModeEnabled: frameMode,
+                        waveOffset: waveOffsetMs
                     },
                     savedAt: new Date().toISOString()
                 };
@@ -2365,6 +2387,10 @@ ${clips}
                 if (data.settings.timeOffset) document.getElementById('frameOffset').value = data.settings.timeOffset;
                 if (data.settings.removePunctuation !== undefined) document.getElementById('removePunctuation').checked = data.settings.removePunctuation;
                 if (data.settings.autoOffsetEnabled !== undefined) document.getElementById('autoOffsetEnabled').checked = data.settings.autoOffsetEnabled;
+                if (data.settings.waveOffset !== undefined) {
+                    waveOffsetMs = Number(data.settings.waveOffset) || 0;
+                    document.getElementById('waveOffset').value = waveOffsetMs;
+                }
                 if (data.settings.frameModeEnabled !== undefined) {
                     frameMode = data.settings.frameModeEnabled;
                     document.getElementById('frameModeEnabled').checked = frameMode;
@@ -2473,7 +2499,9 @@ ${clips}
         let zoomLevel = 50;
         let waveScale = 1;
         let waveData = [];
-        let _wavDrawPending = false; // RAF スロットリング用フラグ
+        let waveChunkDur = 0.05;  // 1チャンクの実測秒数（sampleRateの割り切れなさによる丸めを含む）
+        let waveOffsetMs = 0;     // 波形を動画タイムラインに合わせるための補正量(ms)。字幕時刻には影響しない
+        let _wavRenderPending = false; // RAF スロットリング用フラグ
 
         function extractAudio(file) {
             document.getElementById('waveformContainer').style.display = 'block';
@@ -2484,8 +2512,9 @@ ${clips}
             const canvas = document.getElementById('waveformCanvas');
             const scrollArea = document.getElementById('waveformScroll');
             const ctx = canvas.getContext('2d');
-            canvas.width = scrollArea.clientWidth;
-            canvas.height = scrollArea.clientHeight || 100;
+            canvas.width = Math.max(1, scrollArea.clientWidth);
+            canvas.height = Math.max(1, scrollArea.clientHeight || 100);
+            ctx.setTransform(1, 0, 0, 1, 0, 0);
             ctx.clearRect(0, 0, canvas.width, canvas.height);
 
             const reader = new FileReader();
@@ -2516,74 +2545,155 @@ ${clips}
             if (!audioBuffer) return;
             document.getElementById('loadingText').textContent = '波形を描画中...';
             const channelData = audioBuffer.getChannelData(0);
-            const chunkDur = 0.05;
-            const chunkSize = Math.floor(audioBuffer.sampleRate * chunkDur);
+            const chunkSize = Math.max(1, Math.floor(audioBuffer.sampleRate * 0.05));
+            // 描画側で「1チャンク=0.05秒ちょうど」と仮定すると、sampleRateが20で割り切れない場合
+            // (22050Hz等)にチャンクごとの誤差が累積し、後半ほど波形が右にずれる。実測値を保持して描画に使う。
+            waveChunkDur = chunkSize / audioBuffer.sampleRate;
             waveData = [];
             for (let i = 0; i < channelData.length; i += chunkSize) {
                 let max = 0;
-                for (let j = 0; j < chunkSize && i + j < channelData.length; j++) {
-                    let val = Math.abs(channelData[i + j]);
+                const end = Math.min(i + chunkSize, channelData.length);
+                for (let j = i; j < end; j++) {
+                    const val = Math.abs(channelData[j]);
                     if (val > max) max = val;
                 }
                 waveData.push(max);
             }
             document.getElementById('waveLoading').classList.remove('show');
+            updateWaveSyncInfo();
             drawWaveform();
         }
 
-        function drawWaveform() {
-            if (!waveData.length) return;
-            const canvas = document.getElementById('waveformCanvas');
-            const scrollArea = document.getElementById('waveformScroll');
+        // 音声(decodeAudioData)と動画(<video>)は同じファイルでも時間軸が完全には一致しないことがあるため、
+        // 長さの差を設定パネルに出して手動オフセット調整の手掛かりにする。
+        function updateWaveSyncInfo() {
+            const el = document.getElementById('waveSyncInfo');
+            if (!el) return;
+            if (!audioBuffer || !video.duration || isNaN(video.duration)) { el.textContent = ''; return; }
+            const diffMs = Math.round((audioBuffer.duration - video.duration) * 1000);
+            el.textContent = `音声 ${audioBuffer.duration.toFixed(3)}s / 動画 ${video.duration.toFixed(3)}s`
+                + `（差 ${diffMs >= 0 ? '+' : ''}${diffMs}ms · ${audioBuffer.sampleRate}Hz）`;
+        }
 
-            const totalSecs = audioBuffer.duration;
-            const canvasWidth = totalSecs * zoomLevel;
-            canvas.width = canvasWidth;
-            canvas.height = scrollArea.clientHeight || 100;
+        function applyWaveOffset() {
+            const el = document.getElementById('waveOffset');
+            const v = parseInt(el.value, 10);
+            waveOffsetMs = isNaN(v) ? 0 : v;
+            el.value = waveOffsetMs;
+            autoSave();
+            if (audioBuffer) renderWaveform();
+        }
+
+        function nudgeWaveOffset(d) {
+            document.getElementById('waveOffset').value = waveOffsetMs + d;
+            applyWaveOffset();
+        }
+
+        // スクロール領域の実寸。表示前(幅0)は描画をスキップさせるため vw をそのまま返す。
+        function waveMetrics() {
+            const scrollArea = document.getElementById('waveformScroll');
+            const vw = scrollArea.clientWidth;
+            return { scrollArea, vw, vh: scrollArea.clientHeight || 100, halfW: vw / 2, scrollLeft: scrollArea.scrollLeft };
+        }
+
+        // スクロール量を作る空要素の幅を決める。内容幅 = 左余白(vw/2) + 全長 + 右余白(vw/2) なので
+        // 「時刻tを中央に置くscrollLeft = t * zoomLevel」が全区間でクランプされずに成立する。
+        function layoutWaveform() {
+            if (!audioBuffer) return;
+            const { vw } = waveMetrics();
+            if (vw <= 0) return;
+            const totalSecs = Math.max(audioBuffer.duration, video.duration || 0);
+            document.getElementById('waveContent').style.width = (vw + totalSecs * zoomLevel) + 'px';
+        }
+
+        // 見えている範囲だけをコンテナと同じ大きさのCanvasに描く。
+        // 全長ぶんの巨大Canvas(動画長×zoomLevel px)はブラウザのCanvas最大サイズ(概ね32767〜65535px)を
+        // 簡単に超え、超えたときの挙動(空白になる/バッキングストアだけ縮小されて描画が横に引き伸ばされる)が
+        // ブラウザ依存になるため使わない。引き伸ばしが起きると「後半ほどズレが大きくなる」症状になる。
+        function renderWaveform() {
+            if (!waveData.length || !audioBuffer) return;
+            const canvas = document.getElementById('waveformCanvas');
+            const { vw, vh, halfW, scrollLeft } = waveMetrics();
+            if (vw <= 0) return;
+
+            const dpr = window.devicePixelRatio || 1;
+            const bw = Math.max(1, Math.round(vw * dpr)), bh = Math.max(1, Math.round(vh * dpr));
+            if (canvas.width !== bw) canvas.width = bw;
+            if (canvas.height !== bh) canvas.height = bh;
 
             const ctx = canvas.getContext('2d');
-            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+            ctx.clearRect(0, 0, vw, vh);
 
-            const halfW = scrollArea.clientWidth / 2;
-            document.getElementById('waveSpacerLeft').style.flex = `0 0 ${halfW}px`;
-            document.getElementById('waveSpacerRight').style.flex = `0 0 ${halfW}px`;
+            // 動画時刻(秒) ⇄ ビューポート内X座標(px)
+            const xOf = sec => halfW - scrollLeft + sec * zoomLevel;
+            const tLeft = (scrollLeft - halfW) / zoomLevel;
+            const tRight = (scrollLeft + vw - halfW) / zoomLevel;
 
-            // Draw Subtitle Background Blocks
+            // 字幕ブロック（画面内のものだけ。subsは時刻順なので範囲を過ぎたら打ち切る）
             ctx.fillStyle = 'rgba(66, 215, 125, 0.15)';
             ctx.strokeStyle = 'rgba(66, 215, 125, 0.5)';
             ctx.lineWidth = 1;
             for (const s of subs) {
-                const startX = (s.start / 1000) * zoomLevel;
-                const endX = (s.end / 1000) * zoomLevel;
-                const w = Math.max(1, endX - startX);
-                ctx.fillRect(startX, 0, w, canvas.height);
-                ctx.strokeRect(startX, 0, w, canvas.height);
+                const st = s.start / 1000, en = s.end / 1000;
+                if (st > tRight) break;
+                if (en < tLeft) continue;
+                const w = Math.max(1, (en - st) * zoomLevel);
+                ctx.fillRect(xOf(st), 0, w, vh);
+                ctx.strokeRect(xOf(st), 0, w, vh);
             }
+
+            // 波形本体
+            const midY = vh / 2;
+            const amp = midY * waveScale;
+            const offSec = waveOffsetMs / 1000;
+            const pxPerChunk = waveChunkDur * zoomLevel;
 
             ctx.fillStyle = 'rgba(78, 142, 247, 0.8)';
-            const chunkDur = 0.05;
-            const pixelsPerChunk = zoomLevel * chunkDur;
-            const midY = canvas.height / 2;
-
             ctx.beginPath();
-            ctx.moveTo(0, midY);
-            for (let i = 0; i < waveData.length; i++) {
-                const x = i * pixelsPerChunk;
-                const h = waveData[i] * midY * waveScale;
-                ctx.lineTo(x, midY - h);
-            }
-            for (let i = waveData.length - 1; i >= 0; i--) {
-                const x = i * pixelsPerChunk;
-                const h = waveData[i] * midY * waveScale;
-                ctx.lineTo(x, midY + h);
+            if (pxPerChunk >= 1) {
+                // 1チャンクが1px以上 → チャンク点をそのまま折れ線で結ぶ（従来と同じ見た目）
+                let i0 = Math.floor((tLeft - offSec) / waveChunkDur) - 1;
+                let i1 = Math.ceil((tRight - offSec) / waveChunkDur) + 1;
+                if (i0 < 0) i0 = 0;
+                if (i1 > waveData.length - 1) i1 = waveData.length - 1;
+                if (i1 < i0) return;
+                for (let i = i0; i <= i1; i++) ctx.lineTo(xOf(i * waveChunkDur + offSec), midY - waveData[i] * amp);
+                for (let i = i1; i >= i0; i--) ctx.lineTo(xOf(i * waveChunkDur + offSec), midY + waveData[i] * amp);
+            } else {
+                // 縮小時は1px内に複数チャンクが入る → ピクセルごとの最大値でピーク包絡線を描く
+                const peaks = new Float32Array(vw + 1);
+                const secPerPx = 1 / zoomLevel;
+                for (let x = 0; x <= vw; x++) {
+                    const ta = (scrollLeft + x - halfW) * secPerPx - offSec;
+                    let a = Math.floor(ta / waveChunkDur);
+                    let b = Math.ceil((ta + secPerPx) / waveChunkDur);
+                    if (a < 0) a = 0;
+                    if (b > waveData.length) b = waveData.length;
+                    let m = 0;
+                    for (let i = a; i < b; i++) if (waveData[i] > m) m = waveData[i];
+                    peaks[x] = m;
+                }
+                for (let x = 0; x <= vw; x++) ctx.lineTo(x, midY - peaks[x] * amp);
+                for (let x = vw; x >= 0; x--) ctx.lineTo(x, midY + peaks[x] * amp);
             }
             ctx.closePath();
             ctx.fill();
+        }
 
+        // 全体更新（ズーム変更・字幕更新・サイズ変更時）。スクロールだけの変化には renderWaveform で足りる。
+        function drawWaveform() {
+            if (!waveData.length || !audioBuffer) return;
+            layoutWaveform();
             updateWaveformPlayhead();
-            if (!video.paused) {
-                startWaveformAnimation();
-            }
+            renderWaveform();
+            if (!video.paused) startWaveformAnimation();
+        }
+
+        function scheduleWaveRender() {
+            if (_wavRenderPending) return;
+            _wavRenderPending = true;
+            requestAnimationFrame(() => { _wavRenderPending = false; renderWaveform(); });
         }
 
         function zoomWave(ratio) {
@@ -2618,6 +2728,7 @@ ${clips}
             if (waveformAnimationId === null) {
                 function rafLoop() {
                     updateWaveformPlayhead();
+                    renderWaveform();
                     waveformAnimationId = requestAnimationFrame(rafLoop);
                 }
                 rafLoop();
@@ -2630,8 +2741,22 @@ ${clips}
                 waveformAnimationId = null;
             }
         }
-        document.getElementById('waveformScroll')?.addEventListener('mousedown', () => { window.isDraggingWaveform = true; });
         window.addEventListener('mouseup', () => { window.isDraggingWaveform = false; });
+
+        // スクロール位置が変わったら見えている範囲を描き直す（再生中はrAFループが毎フレーム描いている）
+        document.getElementById('waveformScroll')?.addEventListener('scroll', () => {
+            if (waveformAnimationId !== null) return;
+            scheduleWaveRender();
+        });
+
+        // コンテナ幅が変わると左右余白(vw/2)と再生ヘッド(CSS left:50%)の基準がずれるので作り直す。
+        // 以前はリサイズを一切監視しておらず、ウィンドウ幅を変えると再生ヘッドが (幅の変化量/2)px ずれていた。
+        if (window.ResizeObserver) {
+            new ResizeObserver(() => { if (audioBuffer) drawWaveform(); })
+                .observe(document.getElementById('waveformContainer'));
+        } else {
+            window.addEventListener('resize', () => { if (audioBuffer) drawWaveform(); });
+        }
 
         // タブ非表示時にアニメーションを一時停止してCPUを節約
         document.addEventListener('visibilitychange', () => {
@@ -2674,18 +2799,36 @@ ${clips}
             return bestIdx >= 0 ? { idx: bestIdx, type: bestType } : null;
         }
 
-        document.getElementById('waveformCanvas')?.addEventListener('mousemove', e => {
-            if (!audioBuffer) return;
-            const canvas = document.getElementById('waveformCanvas');
-            const rect = canvas.getBoundingClientRect();
+        // マウス座標 → 動画時刻(ms)。Canvasはビューポート固定になったのでスクロール量を足して換算する。
+        // スクロール領域は先頭/末尾の外側に画面半分ぶんの余白を持つため、0〜動画長にクランプする。
+        function waveEventToMs(e) {
+            const scrollArea = document.getElementById('waveformScroll');
+            const rect = scrollArea.getBoundingClientRect();
+            const halfW = scrollArea.clientWidth / 2;
             const x = e.clientX - rect.left;
-            const hoverMs = (x / zoomLevel) * 1000;
+            const ms = ((scrollArea.scrollLeft + x - halfW) / zoomLevel) * 1000;
+            const maxMs = waveMaxMs();
+            return Math.max(0, Math.min(maxMs, ms));
+        }
+
+        // 編集・シークの上限。動画長が未確定なら音声長で代用する。
+        function waveMaxMs() {
+            const d = (video.duration && !isNaN(video.duration)) ? video.duration : (audioBuffer ? audioBuffer.duration : 0);
+            return d > 0 ? d * 1000 : Infinity;
+        }
+
+        document.getElementById('waveformScroll')?.addEventListener('mousemove', e => {
+            if (!audioBuffer) return;
+            const scrollArea = document.getElementById('waveformScroll');
+            const hoverMs = waveEventToMs(e);
 
             if (dragInfo) {
                 // Currently dragging
                 e.preventDefault();
                 let newMs = Math.round(hoverMs);
                 if (newMs < 0) newMs = 0;
+                const maxMs = waveMaxMs(); // 余白部分までドラッグしても動画長を超えさせない
+                if (newMs > maxMs) newMs = Math.floor(maxMs);
 
                 const s = subs[dragInfo.idx];
                 if (!s) { dragInfo = null; return; } // ドラッグ中にDelete/Undo等でsubsが変異した場合の防御
@@ -2711,24 +2854,18 @@ ${clips}
                 }
 
                 // RAF でスロットリング: mousemove が連打されても1フレームに1回だけ再描画
-                if (!_wavDrawPending) {
-                    _wavDrawPending = true;
-                    requestAnimationFrame(() => { drawWaveform(); _wavDrawPending = false; });
-                }
+                scheduleWaveRender();
                 return;
             }
 
             // Not dragging, check hover for cursor
             const hover = findEdgeAt(hoverMs);
-            canvas.style.cursor = hover ? (hover.type === 'in' ? 'w-resize' : 'e-resize') : 'pointer';
+            scrollArea.style.cursor = hover ? (hover.type === 'in' ? 'w-resize' : 'e-resize') : 'pointer';
         });
 
-        document.getElementById('waveformCanvas')?.addEventListener('mousedown', e => {
+        document.getElementById('waveformScroll')?.addEventListener('mousedown', e => {
             if (!audioBuffer) return;
-            const canvas = document.getElementById('waveformCanvas');
-            const rect = canvas.getBoundingClientRect();
-            const x = e.clientX - rect.left;
-            const clickMs = (x / zoomLevel) * 1000;
+            const clickMs = waveEventToMs(e);
 
             const hit = findEdgeAt(clickMs);
             if (hit) {
@@ -2737,14 +2874,16 @@ ${clips}
                 e.preventDefault();
             } else {
                 // Normal click seek
-                video.currentTime = Math.max(0, x / zoomLevel);
-                updateWaveformPlayhead();
+                video.currentTime = Math.max(0, clickMs / 1000);
+                updateWaveformPlayhead(); // isDraggingWaveform を立てる前に呼び、クリック位置を中央へ寄せる
                 if (video.paused) {
                     const cur = video.currentTime, dur = video.duration || 1;
                     document.getElementById('progressFill').style.width = (cur / dur * 100) + '%';
                     document.getElementById('curTime').textContent = secToTC(cur);
                 }
             }
+            // ドラッグ中はオートスクロールに位置を奪われないようにする（mouseupで解除）
+            window.isDraggingWaveform = true;
         });
 
         window.addEventListener('mouseup', () => {
