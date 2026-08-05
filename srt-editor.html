@@ -1359,9 +1359,11 @@
             reader.readAsText(file, enc);
         }
 
+        // 以前は hidden を付けるだけだったため、字幕を全削除してもドロップ用オーバーレイが戻らなかった。
+        // renderAll から毎回呼び、状態に追従させる。
         function checkOverlay() {
-            if ((videoFileName !== '' || (video.src && video.readyState > 0)) && subs.length > 0)
-                document.getElementById('dropOverlay').classList.add('hidden');
+            const ready = (videoFileName !== '' || (video.src && video.readyState > 0)) && subs.length > 0;
+            document.getElementById('dropOverlay').classList.toggle('hidden', ready);
         }
 
         // ═══ SRT PARSER ═══
@@ -1455,6 +1457,9 @@
             if (selectedIdx >= subs.length) selectedIdx = subs.length - 1;
             if (playingIdx >= subs.length) playingIdx = -1;
             _savedCursor = { idx: -1, pos: -1 }; // 再描画でカーソル保存先のtextareaは作り直されるため無効化
+            // 件数に依存するUIはここで一元的に同期する（deleteRow等の個別経路での更新漏れを防ぐ）
+            document.getElementById('exportBtn').disabled = subs.length === 0;
+            checkOverlay();
             updateAutoOffsetInfo();
             const list = document.getElementById('subList');
             const empty = document.getElementById('emptyEditor');
@@ -1608,8 +1613,6 @@
             renderAll();
             if (clamped) toast('info', '前後の字幕と重ならないよう調整しました');
         }
-        function updateText(i, val) { pushHistory(); subs[i].text = val; autoSave(); }
-
         // _textBeforeEdit: フォーカス時のテキストを記録（undoのため）
         let _textBeforeEdit = '';
 
@@ -1969,13 +1972,9 @@
             const idx = SPEED_STEPS.findIndex(s => Math.abs(s - cur) < 0.01);
             const nextIdx = Math.max(0, Math.min(SPEED_STEPS.length - 1, (idx === -1 ? SPEED_STEPS.indexOf(1) : idx) + delta));
             const newRate = SPEED_STEPS[nextIdx];
-            video.playbackRate = newRate;
-            // UIボタンの更新
-            [0.5, 1, 1.5, 2].forEach(r => {
-                const id = 'speedBtn' + String(Math.round(r * 10)).padStart(2, '0');
-                const btn = document.getElementById(id);
-                if (btn) btn.classList.toggle('active', Math.abs(r - newRate) < 0.01);
-            });
+            // 以前はここでvideo.playbackRateを直接書いてボタンだけ更新していたため、
+            // 速度インジケータ(speedIndicator)が前の値のまま取り残されていた。UI更新は一本化する。
+            setPlaybackRate(newRate);
             toast('info', `再生速度: ${newRate}x`);
         }
 
@@ -2025,7 +2024,7 @@
             document.getElementById('totTime').textContent = secToTC(video.duration);
             // 音声の解析が先に終わっている場合もあるので、動画長が確定した時点で両方を突き合わせ直す
             if (typeof updateWaveSyncInfo === 'function') updateWaveSyncInfo();
-            if (typeof drawWaveform === 'function' && audioBuffer) drawWaveform();
+            if (typeof drawWaveform === 'function' && audioInfo) drawWaveform();
         });
 
         video.addEventListener('error', () => {
@@ -2102,7 +2101,8 @@
             if (e.key === 'ArrowRight') { e.preventDefault(); seekRel(e.shiftKey ? 5 : 1); }
             if (e.key === 'ArrowUp' && selectedIdx > 0) { e.preventDefault(); selectRow(selectedIdx - 1); scrollToRow(selectedIdx - 1); }
             if (e.key === 'ArrowDown' && selectedIdx < subs.length - 1) { e.preventDefault(); selectRow(selectedIdx + 1); scrollToRow(selectedIdx + 1); }
-            if (e.key === 'Delete' && selectedIdx >= 0 && selectedIdx < subs.length) { e.preventDefault(); deleteRow(selectedIdx); }
+            // Macの「delete」キーはBackspaceを送るため両方を受ける（Deleteはfn+deleteのみ）
+            if ((e.key === 'Delete' || e.key === 'Backspace') && selectedIdx >= 0 && selectedIdx < subs.length) { e.preventDefault(); deleteRow(selectedIdx); }
             if (e.key === 'Enter' && selectedIdx >= 0 && selectedIdx < subs.length) { e.preventDefault(); seekTo(selectedIdx); }
             if (e.code === 'KeyJ') { e.preventDefault(); jklJ(); }  // J: 逆再生
             if (e.code === 'KeyK') { e.preventDefault(); jklK(); }  // K: 停止
@@ -2122,7 +2122,7 @@
             autoSave();
 
             setTimeout(() => {
-                if (typeof drawWaveform === 'function' && audioBuffer) {
+                if (typeof drawWaveform === 'function' && audioInfo) {
                     drawWaveform();
                 }
             }, 50);
@@ -2143,9 +2143,12 @@
             if (sp && sb && !sp.contains(e.target) && !sb.contains(e.target)) sp.classList.remove('show');
         });
 
+        let _lastQuery = '';
         function findNext() {
             const q = document.getElementById('searchInput').value.toLowerCase();
             if (!q || subs.length === 0) return;
+            // 検索語を変えたら先頭から探し直す（以前は前の語の位置から続行して先頭側を取りこぼしていた）
+            if (q !== _lastQuery) { searchIdx = -1; _lastQuery = q; }
             let startIdx = (searchIdx + 1) % subs.length;
             let found = -1;
             for (let i = 0; i < subs.length; i++) {
@@ -2163,18 +2166,19 @@
             const q = document.getElementById('searchInput').value;
             const rep = document.getElementById('replaceInput').value;
             if (!q) return;
-            let count = 0;
+            // 対象が無ければ何も変えない（以前は空振りでもUndo履歴を1段積んでいた）
+            const hits = subs.filter(s => s.text.includes(q)).length;
+            if (hits === 0) { toast('info', '見つかりませんでした'); return; }
             pushHistory();
+            let count = 0;
             for (let i = 0; i < subs.length; i++) {
                 if (subs[i].text.includes(q)) {
                     subs[i].text = subs[i].text.split(q).join(rep);
                     count++;
                 }
             }
-            if (count > 0) {
-                renderAll();
-                toast('success', `${count}箇所のテキストを置換しました`);
-            } else { toast('info', '見つかりませんでした'); }
+            renderAll();
+            toast('success', `${count}箇所のテキストを置換しました`);
         }
 
         // ═══ FCPXML EXPORT ═══
@@ -2183,17 +2187,27 @@
             while (b) { [a, b] = [b, a % b]; } return a;
         }
 
-        function msToFCPTime(ms, fpsNum, fpsDen) {
-            if (ms <= 0) return '0/1s';
+        // ミリ秒→フレーム番号（BigInt。msToFrameNumと同一の丸め式）
+        function msToFramesBI(ms, fpsNum, fpsDen) {
+            if (ms <= 0) return 0n;
             const msBI = BigInt(Math.round(ms)), numBI = BigInt(fpsNum), denBI = BigInt(fpsDen);
-            const frames = (msBI * numBI + denBI * 500n) / (denBI * 1000n);
-            const tN = frames * denBI, tD = numBI;
+            return (msBI * numBI + denBI * 500n) / (denBI * 1000n);
+        }
+
+        // フレーム番号→FCPXMLの有理数時刻
+        function framesToFCPTime(frames, fpsNum, fpsDen) {
+            if (frames <= 0n) return '0/1s';
+            const tN = frames * BigInt(fpsDen), tD = BigInt(fpsNum);
             const g = gcd(tN < 0n ? -tN : tN, tD);
             return `${tN / g}/${tD / g}s`;
         }
 
+        function msToFCPTime(ms, fpsNum, fpsDen) {
+            return framesToFCPTime(msToFramesBI(ms, fpsNum, fpsDen), fpsNum, fpsDen);
+        }
+
         async function exportFCPXML() {
-            if (subs.length === 0) return;
+            if (subs.length === 0) { toast('error', '書き出す字幕がありません'); return; } // 以前は無言でreturnしていた
             // 書き出し直前に時刻順へ整列（手編集で順序が崩れていても出力は必ず時刻昇順）
             ensureSortedForExport();
             const fpsVal = document.getElementById('fps').value;
@@ -2227,16 +2241,33 @@
                 }
             }
             if (adj.length === 0) { toast('error', '書き出せる字幕がありません（長さが0、またはオフセットで範囲外になりました）'); return; }
-            const totalMs = prevEnd + 2000; // 順次詰めにより最後に採用したend===最大end
-            const totalTime = msToFCPTime(totalMs, fpsNum, fpsDen);
+
+            // ms空間の重複回避はフレーム空間には効かない（丸めで長さが1フレーム未満に潰れる／
+            // 隣と同じフレームに乗る）。FCPは同一レーンの重複・長さ0を受け付けないので、
+            // 実際に書き出す単位であるフレーム空間でも順に詰めて最低1フレームを保証する。
+            const framed = [];
+            let prevFrame = 0n, snapped = 0;
+            for (const s of adj) {
+                let fs = msToFramesBI(s.start, fpsNum, fpsDen);
+                let fe = msToFramesBI(s.end, fpsNum, fpsDen);
+                const orig = fs;
+                if (fs < prevFrame) fs = prevFrame;
+                if (fe <= fs) fe = fs + 1n; // 丸めで長さが消えた場合は最低1フレーム確保
+                if (fs !== orig) snapped++;
+                framed.push({ fs, fe, text: s.text });
+                prevFrame = fe;
+            }
+            const totalTime = framesToFCPTime(prevFrame + msToFramesBI(2000, fpsNum, fpsDen), fpsNum, fpsDen);
             const isDF = (fpsNum === 30000 && fpsDen === 1001) || (fpsNum === 60000 && fpsDen === 1001);
             const fpsMap = { '24000/1001': '2398', '24/1': '24', '25/1': '25', '30000/1001': '2997', '30/1': '30', '60000/1001': '5994', '60/1': '60' };
             const fpsStr = fpsMap[fpsVal] || String(Math.round(fpsNum / fpsDen));
             const posP = vPos !== '0' ? `\n                    <param name="Position" key="9999/999166631/999166633/2/100/101" value="0 ${vPos}"/>` : '';
             const UID = '.../Titles.localized/Bumper:Opener.localized/Basic Title.localized/Basic Title.moti';
             const esc = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-            const clips = adj.map((s, i) => {
-                const o = msToFCPTime(s.start, fpsNum, fpsDen), d = msToFCPTime(s.end - s.start, fpsNum, fpsDen);
+            const clips = framed.map((s, i) => {
+                // durationは f(end)-f(start)。f(end-start) を別々に丸めると FCP上の占有区間
+                // offset+duration が f(end) と1フレームずれ、隣の字幕と重なる（23.976fpsでは4割超が該当）。
+                const o = framesToFCPTime(s.fs, fpsNum, fpsDen), d = framesToFCPTime(s.fe - s.fs, fpsNum, fpsDen);
                 const t = s.text.replace(/<[^>]+>/g, '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
                 return `                <title name="Subtitle ${i + 1}" ref="r2" offset="${o}" duration="${d}" start="0s" lane="1">${posP}
                     <text><text-style ref="ts${i}">${t}</text-style></text>
@@ -2271,9 +2302,10 @@ ${clips}
                 if (autoOffset > 0) parts.push(`話出し調整: -${autoOffset}ms`);
                 if (frameOffset !== 0) parts.push(`フレーム調整: ${offsetMs > 0 ? '+' : ''}${offsetMs}ms`);
                 if (shifted > 0) parts.push(`重複回避のためIN前詰め: ${shifted}件`);
+                if (snapped > 0) parts.push(`フレーム格子で前詰め: ${snapped}件`);
                 if (dropped > 0) parts.push(`重複・長さ0で除外: ${dropped}件`);
                 const detail = parts.length > 0 ? ` (${parts.join(', ')})` : '';
-                toast(dropped > 0 ? 'error' : 'success', `✓ ${adj.length} 件をFCPXMLに書き出しました${detail}`);
+                toast(dropped > 0 ? 'error' : 'success', `✓ ${framed.length} 件をFCPXMLに書き出しました${detail}`);
             }
         }
 
@@ -2495,7 +2527,11 @@ ${clips}
 
         // ═══ WAVEFORM ═══
         let audioCtx;
-        let audioBuffer;
+        // 解析済み音声の「メタ情報だけ」を保持する { duration, sampleRate }。
+        // 生PCM(AudioBuffer)は波形ピークを取り出したら即座に捨てる。48kHzステレオでは
+        // 10分で約230MB・60分で約1.4GBに達し、長尺動画でタブが落ちるため。
+        let audioInfo = null;
+        const WAVE_DECODE_RATE = 8000; // 波形は0.05秒ごとのピークしか使わないので8kHzで十分（48kHz比で1/6）
         let zoomLevel = 50;
         let waveScale = 1;
         let waveData = [];
@@ -2521,10 +2557,21 @@ ${clips}
             reader.onload = async (e) => {
                 try {
                     document.getElementById('loadingText').textContent = '音声データを解析中 (これには数秒かかります)...';
-                    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-                    const arrayBuffer = e.target.result;
-                    audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
-                    processWaveformData();
+                    // 低いサンプルレートのOfflineAudioContextにデコードさせると、そのレートへ
+                    // リサンプルされたAudioBufferが返るので保持するPCMが激減する。
+                    let decodeCtx = null;
+                    try {
+                        const OAC = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+                        decodeCtx = new OAC(1, 1, WAVE_DECODE_RATE);
+                    } catch (_) { decodeCtx = null; }
+                    if (!decodeCtx) { // 低レート非対応のブラウザは通常のAudioContextで従来どおり
+                        if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                        decodeCtx = audioCtx;
+                    }
+                    // decodeAudioDataはArrayBufferをdetachするため、この経路は一度きり
+                    const decoded = await decodeCtx.decodeAudioData(e.target.result);
+                    if (!decoded) throw new Error('decodeAudioData returned no buffer'); // Promiseを返さない旧実装対策
+                    processWaveformData(decoded); // ピーク配列だけ取り出し、decodedはこの後解放される
                 } catch (err) {
                     console.error('Audio decode error', err);
                     loading.classList.remove('show');
@@ -2541,14 +2588,16 @@ ${clips}
             reader.readAsArrayBuffer(file);
         }
 
-        function processWaveformData() {
-            if (!audioBuffer) return;
+        function processWaveformData(buffer) {
+            if (!buffer) return;
             document.getElementById('loadingText').textContent = '波形を描画中...';
-            const channelData = audioBuffer.getChannelData(0);
-            const chunkSize = Math.max(1, Math.floor(audioBuffer.sampleRate * 0.05));
+            const channelData = buffer.getChannelData(0);
+            const chunkSize = Math.max(1, Math.floor(buffer.sampleRate * 0.05));
             // 描画側で「1チャンク=0.05秒ちょうど」と仮定すると、sampleRateが20で割り切れない場合
             // (22050Hz等)にチャンクごとの誤差が累積し、後半ほど波形が右にずれる。実測値を保持して描画に使う。
-            waveChunkDur = chunkSize / audioBuffer.sampleRate;
+            waveChunkDur = chunkSize / buffer.sampleRate;
+            // 生PCMは以降使わないので、必要なメタ情報だけ写して参照を切る
+            audioInfo = { duration: buffer.duration, sampleRate: buffer.sampleRate };
             waveData = [];
             for (let i = 0; i < channelData.length; i += chunkSize) {
                 let max = 0;
@@ -2569,10 +2618,10 @@ ${clips}
         function updateWaveSyncInfo() {
             const el = document.getElementById('waveSyncInfo');
             if (!el) return;
-            if (!audioBuffer || !video.duration || isNaN(video.duration)) { el.textContent = ''; return; }
-            const diffMs = Math.round((audioBuffer.duration - video.duration) * 1000);
-            el.textContent = `音声 ${audioBuffer.duration.toFixed(3)}s / 動画 ${video.duration.toFixed(3)}s`
-                + `（差 ${diffMs >= 0 ? '+' : ''}${diffMs}ms · ${audioBuffer.sampleRate}Hz）`;
+            if (!audioInfo || !video.duration || isNaN(video.duration)) { el.textContent = ''; return; }
+            const diffMs = Math.round((audioInfo.duration - video.duration) * 1000);
+            el.textContent = `音声 ${audioInfo.duration.toFixed(3)}s / 動画 ${video.duration.toFixed(3)}s`
+                + `（差 ${diffMs >= 0 ? '+' : ''}${diffMs}ms）`;
         }
 
         function applyWaveOffset() {
@@ -2581,7 +2630,7 @@ ${clips}
             waveOffsetMs = isNaN(v) ? 0 : v;
             el.value = waveOffsetMs;
             autoSave();
-            if (audioBuffer) renderWaveform();
+            if (audioInfo) renderWaveform();
         }
 
         function nudgeWaveOffset(d) {
@@ -2599,10 +2648,10 @@ ${clips}
         // スクロール量を作る空要素の幅を決める。内容幅 = 左余白(vw/2) + 全長 + 右余白(vw/2) なので
         // 「時刻tを中央に置くscrollLeft = t * zoomLevel」が全区間でクランプされずに成立する。
         function layoutWaveform() {
-            if (!audioBuffer) return;
+            if (!audioInfo) return;
             const { vw } = waveMetrics();
             if (vw <= 0) return;
-            const totalSecs = Math.max(audioBuffer.duration, video.duration || 0);
+            const totalSecs = Math.max(audioInfo.duration, video.duration || 0);
             document.getElementById('waveContent').style.width = (vw + totalSecs * zoomLevel) + 'px';
         }
 
@@ -2611,7 +2660,7 @@ ${clips}
         // 簡単に超え、超えたときの挙動(空白になる/バッキングストアだけ縮小されて描画が横に引き伸ばされる)が
         // ブラウザ依存になるため使わない。引き伸ばしが起きると「後半ほどズレが大きくなる」症状になる。
         function renderWaveform() {
-            if (!waveData.length || !audioBuffer) return;
+            if (!waveData.length || !audioInfo) return;
             const canvas = document.getElementById('waveformCanvas');
             const { vw, vh, halfW, scrollLeft } = waveMetrics();
             if (vw <= 0) return;
@@ -2683,7 +2732,7 @@ ${clips}
 
         // 全体更新（ズーム変更・字幕更新・サイズ変更時）。スクロールだけの変化には renderWaveform で足りる。
         function drawWaveform() {
-            if (!waveData.length || !audioBuffer) return;
+            if (!waveData.length || !audioInfo) return;
             layoutWaveform();
             updateWaveformPlayhead();
             renderWaveform();
@@ -2713,7 +2762,7 @@ ${clips}
         let waveformAnimationId = null;
 
         function updateWaveformPlayhead() {
-            if (!audioBuffer) return;
+            if (!audioInfo) return;
             const cur = video.currentTime;
             const x = cur * zoomLevel;
 
@@ -2724,7 +2773,7 @@ ${clips}
         }
 
         function startWaveformAnimation() {
-            if (!audioBuffer) return;
+            if (!audioInfo) return;
             if (waveformAnimationId === null) {
                 function rafLoop() {
                     updateWaveformPlayhead();
@@ -2752,10 +2801,10 @@ ${clips}
         // コンテナ幅が変わると左右余白(vw/2)と再生ヘッド(CSS left:50%)の基準がずれるので作り直す。
         // 以前はリサイズを一切監視しておらず、ウィンドウ幅を変えると再生ヘッドが (幅の変化量/2)px ずれていた。
         if (window.ResizeObserver) {
-            new ResizeObserver(() => { if (audioBuffer) drawWaveform(); })
+            new ResizeObserver(() => { if (audioInfo) drawWaveform(); })
                 .observe(document.getElementById('waveformContainer'));
         } else {
-            window.addEventListener('resize', () => { if (audioBuffer) drawWaveform(); });
+            window.addEventListener('resize', () => { if (audioInfo) drawWaveform(); });
         }
 
         // タブ非表示時にアニメーションを一時停止してCPUを節約
@@ -2813,12 +2862,12 @@ ${clips}
 
         // 編集・シークの上限。動画長が未確定なら音声長で代用する。
         function waveMaxMs() {
-            const d = (video.duration && !isNaN(video.duration)) ? video.duration : (audioBuffer ? audioBuffer.duration : 0);
+            const d = (video.duration && !isNaN(video.duration)) ? video.duration : (audioInfo ? audioInfo.duration : 0);
             return d > 0 ? d * 1000 : Infinity;
         }
 
         document.getElementById('waveformScroll')?.addEventListener('mousemove', e => {
-            if (!audioBuffer) return;
+            if (!audioInfo) return;
             const scrollArea = document.getElementById('waveformScroll');
             const hoverMs = waveEventToMs(e);
 
@@ -2864,7 +2913,7 @@ ${clips}
         });
 
         document.getElementById('waveformScroll')?.addEventListener('mousedown', e => {
-            if (!audioBuffer) return;
+            if (!audioInfo) return;
             const clickMs = waveEventToMs(e);
 
             const hit = findEdgeAt(clickMs);
