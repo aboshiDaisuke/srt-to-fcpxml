@@ -1235,9 +1235,7 @@
         // ミリ秒→最寄りフレーム番号（exportFCPXMLのmsToFCPTimeと同一の丸め式。ここで一致させないと
         // 「エディタで見た位置」と「書き出し後にFCPで丸められる位置」がズレる）
         function msToFrameNum(ms, fpsNum, fpsDen) {
-            if (ms <= 0) return 0;
-            const msBI = BigInt(Math.round(ms)), numBI = BigInt(fpsNum), denBI = BigInt(fpsDen);
-            return Number((msBI * numBI + denBI * 500n) / (denBI * 1000n));
+            return Number(msToFramesBI(ms, fpsNum, fpsDen)); // 丸め式はmsToFramesBI（唯一の実装）に委譲
         }
         // フレーム番号→ミリ秒（丸め誤差のない厳密値）
         function frameNumToMs(frame, fpsNum, fpsDen) {
@@ -1247,19 +1245,35 @@
             const [fpsNum, fpsDen] = getFps();
             return frameNumToMs(1, fpsNum, fpsDen);
         }
-        // フレームモード時、ミリ秒値を現在のfpsのフレーム格子へスナップ
+        // フレームモード時、ミリ秒値を現在のfpsのフレーム格子へスナップ。
+        // 必ず整数msへ丸めて返す（0.5ms未満の丸め誤差はフレーム換算に影響しない。
+        // 小数msのまま保持するとSRT/VTT書き出しのタイムコードが壊れるため）
         function quantizeMs(ms) {
             const [fpsNum, fpsDen] = getFps();
-            return frameNumToMs(msToFrameNum(ms, fpsNum, fpsDen), fpsNum, fpsDen);
+            return Math.round(frameNumToMs(msToFrameNum(ms, fpsNum, fpsDen), fpsNum, fpsDen));
         }
         // 全字幕を現在のフレーム格子へ一括スナップ（フレームモードON/fps変更/読込直後に呼ぶ）
         function quantizeAllSubs() {
             if (!frameMode || subs.length === 0) return;
-            const oneFrame = oneFrameMs();
-            for (const s of subs) {
-                s.start = quantizeMs(s.start);
-                s.end = quantizeMs(s.end);
-                if (s.end <= s.start) s.end = s.start + oneFrame; // 量子化で長さが消えた場合は最低1フレーム確保
+            const [fpsNum, fpsDen] = getFps();
+            const toMs = f => Math.round(frameNumToMs(f, fpsNum, fpsDen));
+            const fr = subs.map(s => ({
+                fs: msToFrameNum(s.start, fpsNum, fpsDen),
+                fe: msToFrameNum(s.end, fpsNum, fpsDen),
+            }));
+            // 量子化で長さが消えた字幕は最低1フレーム確保する。後ろへ伸ばすと次の字幕と
+            // 新たな重複を作る場合は、前に1フレームずらせるならそちらを選ぶ
+            for (let i = 0; i < fr.length; i++) {
+                if (fr[i].fe > fr[i].fs) continue;
+                const prevEnd = i > 0 ? fr[i - 1].fe : 0;
+                const nextStart = i < fr.length - 1 ? fr[i + 1].fs : Infinity;
+                if (fr[i].fs + 1 <= nextStart) fr[i].fe = fr[i].fs + 1;
+                else if (fr[i].fs - 1 >= prevEnd) { fr[i].fs -= 1; fr[i].fe = fr[i].fs + 1; }
+                else fr[i].fe = fr[i].fs + 1; // 余地なし: 重複として赤表示に委ねる
+            }
+            for (let i = 0; i < subs.length; i++) {
+                subs[i].start = toMs(fr[i].fs);
+                subs[i].end = toMs(fr[i].fe);
             }
         }
         function updateFrameBadge() {
@@ -1344,16 +1358,13 @@
                 document.getElementById('srtFileName').textContent = file.name;
                 document.getElementById('dropSrt').classList.add('loaded');
                 if (subs.length > 0) {
-                    renderAll();
-                    document.getElementById('exportBtn').disabled = false;
+                    renderAll(); // exportBtn有効化・checkOverlayはrenderAllが一元管理
                     const ov = countOverlaps();
                     toast(ov > 0 ? 'error' : 'success', `${subs.length} 件の字幕を読み込みました${ov > 0 ? `（時間が重複した字幕が ${ov} 件・赤色表示）` : ''}`);
                 } else {
                     renderAll(); // 前のファイルの行を画面に残さない（subsは空なので空表示になる）
-                    document.getElementById('exportBtn').disabled = true;
                     toast('error', '字幕が見つかりません');
                 }
-                checkOverlay();
             };
             reader.onerror = () => { toast('error', 'SRTファイルの読み込みに失敗しました'); };
             reader.readAsText(file, enc);
@@ -1362,9 +1373,18 @@
         // 以前は hidden を付けるだけだったため、字幕を全削除してもドロップ用オーバーレイが戻らなかった。
         // renderAll から毎回呼び、状態に追従させる。
         function checkOverlay() {
-            const ready = (videoFileName !== '' || (video.src && video.readyState > 0)) && subs.length > 0;
-            document.getElementById('dropOverlay').classList.toggle('hidden', ready);
+            // 実際に動画が読み込まれているかで判定する。復元直後はvideoFileNameだけが残っているため、
+            // それを「動画あり」と数えると再ドロップ用オーバーレイが出ず黒い画面だけになる。
+            const videoReady = !!(video.src && video.readyState > 0);
+            const ready = videoReady && subs.length > 0;
+            // 再生中の動画は覆わない（字幕を全削除しても再生・操作コントロールを塞がない。
+            // ファイルのドロップはページ全体で受けられるので支障はない）
+            document.getElementById('dropOverlay').classList.toggle('hidden', ready || (videoReady && !video.paused));
         }
+        // 再生/一時停止・読込完了でもオーバーレイ表示を追従させる
+        video.addEventListener('play', checkOverlay);
+        video.addEventListener('pause', checkOverlay);
+        video.addEventListener('loadeddata', checkOverlay);
 
         // ═══ SRT PARSER ═══
         // SRT形式（常にミリ秒カンマ区切り HH:MM:SS,mmm）: ファイルの読み書き専用。frameModeの影響を受けない
@@ -1400,27 +1420,27 @@
             if (!info) return;
             if (subs.length > 0) {
                 const t = subs[0].start;
-                const h = Math.floor(t / 3600000);
-                const m = Math.floor((t % 3600000) / 60000);
-                const s = Math.floor((t % 60000) / 1000);
-                const ms = t % 1000;
-                const tcStr = `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')},${String(ms).padStart(3, '0')}`;
-                info.innerHTML = `話出し: <span style="color:var(--green); font-family:'Menlo',monospace;">${tcStr}</span> → 0秒にぴったりシフト (-${t}ms)`;
+                const tcStr = msToSrtTC(t);
+                info.innerHTML = `話出し: <span style="color:var(--green); font-family:'Menlo',monospace;">${tcStr}</span> → 0秒にぴったりシフト (-${Math.round(t)}ms)`;
             } else {
                 info.textContent = '— SRTを読み込むと話出し時刻を表示';
             }
         }
 
         // ═══ RENDER ═══
-        // SRT形式での出力専用（常にミリ秒カンマ区切り。frameModeの影響を受けない）
-        function msToSrtTC(ms) {
-            if (ms < 0) ms = 0;
+        // ms→タイムコード文字列の唯一の実装（sep: SRTは','、VTT・表示用は'.'）。
+        // 値が小数msでもここで必ず整数へ丸める（フレーム格子由来の小数msをそのまま整形すると
+        // 「00:00:01,33.333…」のような不正なタイムコードが書き出されるため）
+        function formatMsTc(ms, sep) {
+            ms = Math.max(0, Math.round(ms));
             const h = Math.floor(ms / 3600000);
             const m = Math.floor((ms % 3600000) / 60000);
             const s = Math.floor((ms % 60000) / 1000);
             const f = ms % 1000;
-            return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')},${String(f).padStart(3, '0')}`;
+            return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}${sep}${String(f).padStart(3, '0')}`;
         }
+        // SRT形式での出力専用（常にミリ秒カンマ区切り。frameModeの影響を受けない）
+        function msToSrtTC(ms) { return formatMsTc(ms, ','); }
 
         // 画面表示・編集用: フレームモード時はHH:MM:SS:FF（NDF表示）、それ以外はSRT形式と同じ
         function msToTC(ms) {
@@ -1472,8 +1492,9 @@
             }
             empty.style.display = 'none';
 
+            const ovFlags = computeOverlapFlags();
             list.innerHTML = subs.map((s, i) => `
-        <div class="sub-row ${i === selectedIdx ? 'active' : ''} ${i === playingIdx ? 'playing' : ''} ${isOverlap(i) ? 'overlap' : ''}"
+        <div class="sub-row ${i === selectedIdx ? 'active' : ''} ${i === playingIdx ? 'playing' : ''} ${ovFlags[i] ? 'overlap' : ''}"
              id="row-${i}" onclick="selectRow(${i})" ondblclick="seekTo(${i})">
           <div class="col-idx">${i + 1}</div>
           <div class="col-tc">
@@ -1507,7 +1528,7 @@
         </div>
       `).join('');
 
-            autoSave();
+            scheduleAutoSave(); // 描画のたびに全字幕を同期シリアライズしない（高頻度経路対策）
             if (typeof drawWaveform === 'function') drawWaveform();
         }
 
@@ -1526,15 +1547,22 @@
             if (i < subs.length - 1) ms = Math.min(ms, subs[i + 1].start);
             return ms;
         }
-        // 前後いずれかの字幕と時間が重なっているか
-        function isOverlap(i) {
-            if (i > 0 && subs[i].start < subs[i - 1].end) return true;
-            if (i < subs.length - 1 && subs[i].end > subs[i + 1].start) return true;
-            return false;
+        // 全字幕の重複フラグを一括計算。隣接だけでなく「飛び地」の重複（長い字幕が2つ以上先の
+        // 字幕と重なるケース）も検出する。従来の隣接チェックでは飛び地側が赤表示されないまま
+        // FCPXML書き出しで黙って除外されていた。配列は開始時刻順が前提。
+        function computeOverlapFlags() {
+            const flags = new Array(subs.length).fill(false);
+            let maxEnd = -Infinity, maxIdx = -1;
+            for (let i = 0; i < subs.length; i++) {
+                if (maxIdx >= 0 && subs[i].start < maxEnd) { flags[i] = true; flags[maxIdx] = true; }
+                if (subs[i].end > maxEnd) { maxEnd = subs[i].end; maxIdx = i; }
+            }
+            return flags;
         }
+        // 重複に関与している字幕の件数
         function countOverlaps() {
             let n = 0;
-            for (let i = 0; i < subs.length - 1; i++) if (subs[i].end > subs[i + 1].start) n++;
+            for (const f of computeOverlapFlags()) if (f) n++;
             return n;
         }
 
@@ -1548,9 +1576,10 @@
             let clamped = c !== ms;
             if (c >= subs[i].end) {
                 const gap = frameMode ? oneFrameMs() : 500;
-                const newEnd = clampEnd(i, c + gap);
+                // フレームモード時は加減算の結果を再量子化して整数msを維持する（oneFrameMsは小数になり得る）
+                const newEnd = clampEnd(i, frameMode ? quantizeMs(c + gap) : c + gap);
                 if (newEnd > c) subs[i].end = newEnd;
-                else { c = subs[i].end - (frameMode ? oneFrameMs() : 1); clamped = true; }
+                else { c = frameMode ? quantizeMs(subs[i].end - gap) : subs[i].end - 1; clamped = true; }
             }
             subs[i].start = Math.max(0, c);
             return clamped;
@@ -1562,9 +1591,9 @@
             let clamped = c !== ms;
             if (c <= subs[i].start) {
                 const gap = frameMode ? oneFrameMs() : 500;
-                const newStart = clampStart(i, c - gap);
+                const newStart = clampStart(i, frameMode ? quantizeMs(c - gap) : c - gap);
                 if (newStart < c) subs[i].start = newStart;
-                else { c = subs[i].start + (frameMode ? oneFrameMs() : 1); clamped = true; }
+                else { c = frameMode ? quantizeMs(subs[i].start + gap) : subs[i].start + 1; clamped = true; }
             }
             subs[i].end = c;
             return clamped;
@@ -1597,7 +1626,16 @@
             toast('info', '時刻順に整列してから書き出します');
         }
 
-        function selectRow(i) { selectedIdx = i; renderAll(); }
+        // 選択の切替は該当2行のclass付け替えだけで済ませる（renderAllで全行を作り直すと
+        // 大きいSRTでクリックのたびに全DOM再構築・フォーカス喪失・全量autoSaveが起きるため）
+        function selectRow(i) {
+            if (i === selectedIdx) return;
+            const prev = document.getElementById(`row-${selectedIdx}`);
+            if (prev) prev.classList.remove('active');
+            selectedIdx = i;
+            const cur = document.getElementById(`row-${i}`);
+            if (cur) cur.classList.add('active');
+        }
 
         function updateTC(i, field, el) {
             const newMs = tcToMs(el.value); // 形式判定はtcToMsに一元化（不一致はNaN）
@@ -1681,15 +1719,16 @@
         // ═══ HISTORY (UNDO) ═══
         let historyStack = [];
         function pushHistory() {
-            historyStack.push(JSON.stringify(subs));
+            const snap = JSON.stringify(subs);
+            // 直前と同一内容なら積まない（無変化のUndo空振り・50件上限からの実編集の押し出しを防ぐ）
+            if (historyStack.length > 0 && historyStack[historyStack.length - 1] === snap) return;
+            historyStack.push(snap);
             if (historyStack.length > 50) historyStack.shift();
         }
         function undo() {
             if (historyStack.length === 0) { toast('info', 'これ以上戻れません'); return; }
             subs = JSON.parse(historyStack.pop());
-            renderAll(); // 件数減少時の範囲外インデックスはrenderAll冒頭の中央ガードが修復する
-            // Undo後に字幕が0件になった場合は書き出しボタンを無効化
-            document.getElementById('exportBtn').disabled = subs.length === 0;
+            renderAll(); // 範囲外インデックス修復・exportBtn無効化・checkOverlayはrenderAll冒頭が一元管理
             toast('info', '元に戻しました');
         }
 
@@ -1776,6 +1815,7 @@
             };
             
             subs.splice(i + 1, 0, newSub);
+            if (selectedIdx > i) selectedIdx++; // 選択より上で分割したら選択が同じ字幕を指し続けるよう追従
 
             // 分割後に時間順を再整理し、一覧表の交差・前後関係の狂いを根本から防ぐ
             sortSubsByTime();
@@ -1795,7 +1835,10 @@
 
         function setOut(i) {
             if (!video.src || video.readyState === 0) { toast('error', '動画を読み込んでください'); return; }
-            const nowMs = Math.round(video.currentTime * 1000);
+            // フレームモード時は量子化後の値でガードする（生msだとINと同フレームへ丸まる値がすり抜け、
+            // setEndClamped側の救済でIN点が1フレーム前へ黙って動いてしまう）
+            const rawMs = Math.round(video.currentTime * 1000);
+            const nowMs = frameMode ? quantizeMs(rawMs) : rawMs;
             if (nowMs <= subs[i].start) {
                 toast('error', 'IN点より前には設定できません');
                 return;
@@ -1817,9 +1860,7 @@
             const newEnd = frameMode ? quantizeMs(lastEnd + 2000) : lastEnd + 2000;
             subs.push({ start: lastEnd, end: newEnd, text: '新しい字幕' });
             selectedIdx = subs.length - 1;
-            renderAll();
-            document.getElementById('exportBtn').disabled = false;
-            checkOverlay();
+            renderAll(); // exportBtn有効化・checkOverlayはrenderAllが一元管理
             scrollToRow(selectedIdx);
         }
 
@@ -2039,20 +2080,16 @@
             video.currentTime = ((e.clientX - rect.left) / rect.width) * (video.duration || 0);
         });
 
-        function secToTC(s) {
-            const totalMs = Math.round(s * 1000);
-            const h = Math.floor(totalMs / 3600000);
-            const m = Math.floor((totalMs % 3600000) / 60000);
-            const sec = Math.floor((totalMs % 60000) / 1000);
-            const ms = totalMs % 1000;
-            return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}.${String(ms).padStart(3, '0')}`;
-        }
+        function secToTC(s) { return formatMsTc(s * 1000, '.'); }
 
         // ═══ KEYBOARD ═══
         document.addEventListener('keydown', e => {
-            // Option / Alt + Key shortcuts ( works even while typing in input fields! )
+            // Option / Alt + Key shortcuts（字幕テキストのTEXTAREA編集中でも効く。ただし検索・置換や
+            // タイムコード等のINPUT/SELECT編集中は除外: macOSではOption+英字が「ç」等の文字入力・
+            // Option+矢印が単語移動のため、乗っ取ると入力操作が字幕を破壊してしまう）
             // meta/ctrl併用時は除外（Cmd+Option+I=DevTools等のブラウザショートカットを乗っ取らない）
-            if (e.altKey && !e.metaKey && !e.ctrlKey && selectedIdx >= 0 && selectedIdx < subs.length
+            const typingInField = e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT';
+            if (!typingInField && e.altKey && !e.metaKey && !e.ctrlKey && selectedIdx >= 0 && selectedIdx < subs.length
                 && (e.code === 'KeyC' || e.code === 'KeyV' || e.code === 'KeyI' || e.code === 'KeyO')) {
                 e.preventDefault();
                 // テキスト編集中なら先にblurで確定させる（編集途中のテキストがpushHistoryの履歴に焼き込まれ、
@@ -2066,7 +2103,7 @@
             }
 
             // フレームモード: Option+←/→ でIN点、Option+↑/↓ でOUT点をフレーム単位で微調整（Shiftで10フレーム）
-            if (e.altKey && !e.metaKey && !e.ctrlKey && frameMode && selectedIdx >= 0 && selectedIdx < subs.length
+            if (!typingInField && e.altKey && !e.metaKey && !e.ctrlKey && frameMode && selectedIdx >= 0 && selectedIdx < subs.length
                 && (e.code === 'ArrowLeft' || e.code === 'ArrowRight' || e.code === 'ArrowUp' || e.code === 'ArrowDown')) {
                 e.preventDefault();
                 if (document.activeElement && document.activeElement.tagName === 'TEXTAREA') document.activeElement.blur();
@@ -2187,7 +2224,7 @@
             while (b) { [a, b] = [b, a % b]; } return a;
         }
 
-        // ミリ秒→フレーム番号（BigInt。msToFrameNumと同一の丸め式）
+        // ミリ秒→フレーム番号（BigInt。丸め式の唯一の実装。エディタ側のmsToFrameNumもこれに委譲）
         function msToFramesBI(ms, fpsNum, fpsDen) {
             if (ms <= 0) return 0n;
             const msBI = BigInt(Math.round(ms)), numBI = BigInt(fpsNum), denBI = BigInt(fpsDen);
@@ -2210,10 +2247,10 @@
             if (subs.length === 0) { toast('error', '書き出す字幕がありません'); return; } // 以前は無言でreturnしていた
             // 書き出し直前に時刻順へ整列（手編集で順序が崩れていても出力は必ず時刻昇順）
             ensureSortedForExport();
-            const fpsVal = document.getElementById('fps').value;
-            const [fpsNum, fpsDen] = fpsVal.split('/').map(Number);
+            const fpsVal = document.getElementById('fps').value; // fpsMapのキー用
+            const [fpsNum, fpsDen] = getFps();
             const frameOffset = parseInt(document.getElementById('frameOffset').value || '0');
-            const offsetMs = Math.round(frameOffset * (fpsDen / fpsNum) * 1000);
+            const offsetMs = Math.round(frameNumToMs(frameOffset, fpsNum, fpsDen));
             const vPos = document.getElementById('verticalPos').value;
             const name = srtFileName || videoFileName || 'Subtitles';
             const [width, height] = document.getElementById('resolution').value.split('x');
@@ -2246,13 +2283,13 @@
             // 隣と同じフレームに乗る）。FCPは同一レーンの重複・長さ0を受け付けないので、
             // 実際に書き出す単位であるフレーム空間でも順に詰めて最低1フレームを保証する。
             const framed = [];
-            let prevFrame = 0n, snapped = 0;
+            let prevFrame = 0n, snapped = 0, extended = 0;
             for (const s of adj) {
                 let fs = msToFramesBI(s.start, fpsNum, fpsDen);
                 let fe = msToFramesBI(s.end, fpsNum, fpsDen);
                 const orig = fs;
                 if (fs < prevFrame) fs = prevFrame;
-                if (fe <= fs) fe = fs + 1n; // 丸めで長さが消えた場合は最低1フレーム確保
+                if (fe <= fs) { fe = fs + 1n; extended++; } // 丸めで長さが消えた場合は最低1フレーム確保
                 if (fs !== orig) snapped++;
                 framed.push({ fs, fe, text: s.text });
                 prevFrame = fe;
@@ -2268,7 +2305,7 @@
                 // durationは f(end)-f(start)。f(end-start) を別々に丸めると FCP上の占有区間
                 // offset+duration が f(end) と1フレームずれ、隣の字幕と重なる（23.976fpsでは4割超が該当）。
                 const o = framesToFCPTime(s.fs, fpsNum, fpsDen), d = framesToFCPTime(s.fe - s.fs, fpsNum, fpsDen);
-                const t = s.text.replace(/<[^>]+>/g, '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+                const t = esc(s.text.replace(/<[^>]+>/g, '')); // タグ除去→XMLエスケープ（escに一元化）
                 return `                <title name="Subtitle ${i + 1}" ref="r2" offset="${o}" duration="${d}" start="0s" lane="1">${posP}
                     <text><text-style ref="ts${i}">${t}</text-style></text>
                     <text-style-def id="ts${i}"><text-style font="Helvetica Neue" fontSize="52" fontFace="Bold" fontColor="1 1 1 1" strokeColor="0 0 0 1" strokeWidth="3" baseline="0" alignment="center"/></text-style-def>
@@ -2303,6 +2340,7 @@ ${clips}
                 if (frameOffset !== 0) parts.push(`フレーム調整: ${offsetMs > 0 ? '+' : ''}${offsetMs}ms`);
                 if (shifted > 0) parts.push(`重複回避のためIN前詰め: ${shifted}件`);
                 if (snapped > 0) parts.push(`フレーム格子で前詰め: ${snapped}件`);
+                if (extended > 0) parts.push(`最低1フレームへ延長: ${extended}件`);
                 if (dropped > 0) parts.push(`重複・長さ0で除外: ${dropped}件`);
                 const detail = parts.length > 0 ? ` (${parts.join(', ')})` : '';
                 toast(dropped > 0 ? 'error' : 'success', `✓ ${framed.length} 件をFCPXMLに書き出しました${detail}`);
@@ -2317,11 +2355,9 @@ ${clips}
         }
 
         function updateOffsetDisplay() {
-            const fpsVal = document.getElementById('fps').value;
-            const parts = fpsVal.split('/').map(Number);
-            const fpsNum = parts[0], fpsDen = parts[1];
+            const [fpsNum, fpsDen] = getFps();
             const frameOffset = parseInt(document.getElementById('frameOffset').value || '0');
-            const offsetMs = Math.round(frameOffset * (fpsDen / fpsNum) * 1000);
+            const offsetMs = Math.round(frameNumToMs(frameOffset, fpsNum, fpsDen));
             
             const msDisp = document.getElementById('offsetMsDisplay');
             const dirDisp = document.getElementById('offsetDirection');
@@ -2357,6 +2393,16 @@ ${clips}
         }
 
         // ═══ AUTO-SAVE (localStorage) ═══
+        // renderAllは高頻度で呼ばれるため、そこからの保存はデバウンスする（用途はクラッシュ復元）
+        let _autoSaveTimer = null;
+        function scheduleAutoSave() {
+            clearTimeout(_autoSaveTimer);
+            _autoSaveTimer = setTimeout(() => { _autoSaveTimer = null; autoSave(); }, 500);
+        }
+        // タブを閉じる直前に未保存分を書き切る
+        window.addEventListener('beforeunload', () => {
+            if (_autoSaveTimer !== null) { clearTimeout(_autoSaveTimer); _autoSaveTimer = null; autoSave(); }
+        });
         function autoSave() {
             try {
                 const data = {
@@ -2427,7 +2473,6 @@ ${clips}
                     frameMode = data.settings.frameModeEnabled;
                     document.getElementById('frameModeEnabled').checked = frameMode;
                     updateFrameBadge();
-                    quantizeAllSubs(); // 保存時と同じfpsのはずだが念のためスナップし直す
                 }
                 if (data.settings.layout) {
                     currentLayout = data.settings.layout;
@@ -2437,9 +2482,11 @@ ${clips}
                 }
                 updateOffsetDisplay();
             }
+            // frameMode設定を持たない旧形式の保存データでも、現在の設定でフレーム格子へスナップし直す
+            // （スナップ漏れがあると表示位置と書き出し結果がズレる。frameMode OFFなら何もしない）
+            quantizeAllSubs();
             if (subs.length > 0) {
-                renderAll();
-                document.getElementById('exportBtn').disabled = false;
+                renderAll(); // exportBtn有効化はrenderAllが一元管理
                 const ov = countOverlaps();
                 if (ov > 0) toast('error', `復元しました（時間が重複した字幕が ${ov} 件・赤色表示）`);
             }
@@ -2479,6 +2526,8 @@ ${clips}
         }
 
         // ═══ SRT EXPORT ═══
+        // 字幕内の空行はSRT/VTTのキュー区切りと衝突し、再読込時に後半テキストが黙って欠落するため書き出し時に畳む
+        function exportText(t) { return t.replace(/\n\s*\n/g, '\n').trim(); }
         async function exportSRT() {
             if (subs.length === 0) { toast('error', '保存する字幕がありません'); return; }
             ensureSortedForExport(); // 出力は必ず時刻昇順（FCPXML書き出しと同じ扱い）
@@ -2487,7 +2536,7 @@ ${clips}
                 const s = subs[i];
                 srtContent += `${i + 1}\n`;
                 srtContent += `${msToSrtTC(s.start)} --> ${msToSrtTC(s.end)}\n`;
-                srtContent += `${s.text}\n\n`;
+                srtContent += `${exportText(s.text)}\n\n`;
             }
             // Ensure CRLF for SRT standard
             srtContent = srtContent.replace(/\r\n/g, '\n').replace(/\n/g, '\r\n');
@@ -2502,20 +2551,13 @@ ${clips}
             ensureSortedForExport(); // 出力は必ず時刻昇順（FCPXML書き出しと同じ扱い）
             let vttContent = 'WEBVTT\n\n';
 
-            const msToVttTc = (ms) => {
-                if (ms < 0) ms = 0;
-                const h = Math.floor(ms / 3600000);
-                const m = Math.floor((ms % 3600000) / 60000);
-                const s = Math.floor((ms % 60000) / 1000);
-                const f = ms % 1000;
-                return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}.${String(f).padStart(3, '0')}`;
-            };
+            const msToVttTc = (ms) => formatMsTc(ms, '.');
 
             for (let i = 0; i < subs.length; i++) {
                 const s = subs[i];
                 vttContent += `${i + 1}\n`;
                 vttContent += `${msToVttTc(s.start)} --> ${msToVttTc(s.end)}\n`;
-                vttContent += `${s.text}\n\n`;
+                vttContent += `${exportText(s.text)}\n\n`;
             }
 
             const blob = new Blob([vttContent], { type: 'text/vtt;charset=utf-8' });
@@ -2538,8 +2580,10 @@ ${clips}
         let waveChunkDur = 0.05;  // 1チャンクの実測秒数（sampleRateの割り切れなさによる丸めを含む）
         let waveOffsetMs = 0;     // 波形を動画タイムラインに合わせるための補正量(ms)。字幕時刻には影響しない
         let _wavRenderPending = false; // RAF スロットリング用フラグ
+        let _audioGen = 0; // 音声解析の世代。解析中に別の動画が読み込まれたら古い結果を捨てる
 
         function extractAudio(file) {
+            const gen = ++_audioGen;
             document.getElementById('waveformContainer').style.display = 'block';
             const loading = document.getElementById('waveLoading');
             loading.classList.add('show');
@@ -2570,9 +2614,11 @@ ${clips}
                     }
                     // decodeAudioDataはArrayBufferをdetachするため、この経路は一度きり
                     const decoded = await decodeCtx.decodeAudioData(e.target.result);
+                    if (gen !== _audioGen) return; // 解析中に別の動画が読み込まれた。古い波形で上書きしない
                     if (!decoded) throw new Error('decodeAudioData returned no buffer'); // Promiseを返さない旧実装対策
                     processWaveformData(decoded); // ピーク配列だけ取り出し、decodedはこの後解放される
                 } catch (err) {
+                    if (gen !== _audioGen) return; // 新しい動画の解析が進行中。古いエラー表示で邪魔しない
                     console.error('Audio decode error', err);
                     loading.classList.remove('show');
                     ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -2582,6 +2628,7 @@ ${clips}
                 }
             };
             reader.onerror = () => {
+                if (gen !== _audioGen) return;
                 loading.classList.remove('show');
                 toast('error', '音声データの読み込みに失敗しました');
             };
@@ -2742,7 +2789,16 @@ ${clips}
         function scheduleWaveRender() {
             if (_wavRenderPending) return;
             _wavRenderPending = true;
-            requestAnimationFrame(() => { _wavRenderPending = false; renderWaveform(); });
+            requestAnimationFrame(() => {
+                _wavRenderPending = false;
+                // エッジドラッグ中のライブプレビュー: シークは1フレームに1回・前のシーク完了を待って行う
+                if (dragInfo && dragInfo.previewMs >= 0 && video.src && !video.seeking) {
+                    video.currentTime = dragInfo.previewMs / 1000;
+                    updateWaveformPlayhead();
+                    dragInfo.previewMs = -1;
+                }
+                renderWaveform();
+            });
         }
 
         function zoomWave(ratio) {
@@ -2790,7 +2846,6 @@ ${clips}
                 waveformAnimationId = null;
             }
         }
-        window.addEventListener('mouseup', () => { window.isDraggingWaveform = false; });
 
         // スクロール位置が変わったら見えている範囲を描き直す（再生中はrAFループが毎フレーム描いている）
         document.getElementById('waveformScroll')?.addEventListener('scroll', () => {
@@ -2880,27 +2935,33 @@ ${clips}
                 if (newMs > maxMs) newMs = Math.floor(maxMs);
 
                 const s = subs[dragInfo.idx];
-                if (!s) { dragInfo = null; return; } // ドラッグ中にDelete/Undo等でsubsが変異した場合の防御
+                // ドラッグ中にDelete/Undo等でsubsが変異した場合の防御。インデックスの存在だけでなく
+                // mousedown時と同一の字幕オブジェクトかも確認する（別の字幕を掴んで書き換えない）
+                if (!s || s !== dragInfo.sub) { dragInfo = null; return; }
                 const i = dragInfo.idx;
                 // フレームモード時はマウス位置を先にフレーム格子へスナップしてからクランプする
                 // （クランプを先にやると「s.end - 1ms」のような格子から外れた値になり得るため）
                 if (frameMode) newMs = quantizeMs(newMs);
-                const minGap = frameMode ? oneFrameMs() : 1;
                 if (dragInfo.type === 'in') {
                     if (i > 0 && newMs < subs[i - 1].end) newMs = subs[i - 1].end; // 前の字幕と重ならない
-                    if (newMs >= s.end) newMs = s.end - minGap; // Prevent crossing OUT
-                    s.start = newMs;
+                    if (newMs >= s.end) newMs = frameMode ? quantizeMs(s.end - oneFrameMs()) : s.end - 1; // Prevent crossing OUT
+                    if (newMs !== s.start) {
+                        // 履歴は実際に動いた時点で1回だけ積む（ドラッグ前の状態を保存してから書き換える）
+                        if (!dragInfo.moved) { pushHistory(); dragInfo.moved = true; }
+                        s.start = newMs;
+                    }
                 } else if (dragInfo.type === 'out') {
                     if (i < subs.length - 1 && newMs > subs[i + 1].start) newMs = subs[i + 1].start; // 次の字幕と重ならない
-                    if (newMs <= s.start) newMs = s.start + minGap; // Prevent crossing IN
-                    s.end = newMs;
+                    if (newMs <= s.start) newMs = frameMode ? quantizeMs(s.start + oneFrameMs()) : s.start + 1; // Prevent crossing IN
+                    if (newMs !== s.end) {
+                        if (!dragInfo.moved) { pushHistory(); dragInfo.moved = true; }
+                        s.end = newMs;
+                    }
                 }
 
-                // Live preview time
-                if (video.src) {
-                    video.currentTime = newMs / 1000;
-                    updateWaveformPlayhead();
-                }
+                // Live preview: シークはrAF側で1フレームに1回だけ行う（mousemove毎にcurrentTimeへ
+                // 代入すると進行中のシークがキャンセルされ続け、デコーダが飽和してドラッグが重くなる）
+                dragInfo.previewMs = newMs;
 
                 // RAF でスロットリング: mousemove が連打されても1フレームに1回だけ再描画
                 scheduleWaveRender();
@@ -2918,8 +2979,8 @@ ${clips}
 
             const hit = findEdgeAt(clickMs);
             if (hit) {
-                pushHistory();
-                dragInfo = { idx: hit.idx, type: hit.type };
+                // pushHistoryはmousemoveで実際に動いた時点で行う（クリックだけで無変化の履歴を積まない）
+                dragInfo = { idx: hit.idx, type: hit.type, sub: subs[hit.idx], moved: false, previewMs: -1 };
                 e.preventDefault();
             } else {
                 // Normal click seek
@@ -2937,8 +2998,9 @@ ${clips}
 
         window.addEventListener('mouseup', () => {
             if (dragInfo) {
+                const moved = dragInfo.moved;
                 dragInfo = null;
-                renderAll(); // Full render to update the list view
+                if (moved) renderAll(); // Full render to update the list view
             }
             window.isDraggingWaveform = false;
         });
